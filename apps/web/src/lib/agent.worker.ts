@@ -11,6 +11,7 @@ let waitTimer: ReturnType<typeof setTimeout> | undefined;
 let idleTimer: ReturnType<typeof setTimeout> | undefined;
 let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let reconnectDelayMs = 500;
 let lastAppliedSeq = 0;
 let streamEndSeq: number | null = null;
 let turnActive = false;
@@ -19,7 +20,7 @@ const answeredPingSeqs = new Set<number>();
 const sequenceGate = createSequenceGate();
 
 const LATENCY_SPIKE_AFTER_MS = 2000;
-const RECONNECT_AFTER_MS = 500;
+const MAX_RECONNECT_AFTER_MS = 10000;
 const RESUME_WHEN_STALLED_MS = 1500;
 const MISSING_STREAM_END_AFTER_MS = 8000;
 
@@ -55,6 +56,7 @@ const markConnected = () => {
   clearTimeout(idleTimer);
   clearResumeTimer();
   clearReconnectTimer();
+  reconnectDelayMs = 500;
   setStatus("connected");
 };
 
@@ -201,7 +203,8 @@ const connect = (resume: boolean) => {
 
 const scheduleReconnect = () => {
   clearReconnectTimer();
-  reconnectTimer = setTimeout(() => connect(queued === undefined), RECONNECT_AFTER_MS);
+  reconnectTimer = setTimeout(() => connect(queued === undefined), reconnectDelayMs);
+  reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_AFTER_MS);
 };
 
 const sendUserMessage = (content: string) => {
@@ -209,6 +212,7 @@ const sendUserMessage = (content: string) => {
   sequenceGate.startTurn();
   ackedToolCalls.clear();
   answeredPingSeqs.clear();
+  reconnectDelayMs = 500;
   lastAppliedSeq = 0;
   streamEndSeq = null;
   turnActive = true;
