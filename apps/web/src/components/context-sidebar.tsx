@@ -28,10 +28,10 @@ export function ContextSidebar({
     );
     observer.observe(viewer);
     return () => observer.disconnect();
-  }, []);
+  }, [contextIds.length]);
 
   return (
-    <aside className="h-full min-w-0 border-l p-4">
+    <aside className="h-full min-w-0 overflow-hidden border-l p-4">
       <h2 className="font-semibold">Context</h2>
       {contextIds.length ? (
         <div className="mt-3 flex h-[calc(100%-1.75rem)] min-w-0 flex-col gap-3 overflow-hidden">
@@ -50,7 +50,7 @@ export function ContextSidebar({
               </button>
             ))}
           </div>
-          <div className="min-h-0 flex-1" ref={viewerRef}>
+          <div className="min-h-0 flex-1 overflow-hidden" ref={viewerRef}>
             {slot && height > 0 ? (
               <VirtualDiffViewer
                 className="min-w-0 text-xs"

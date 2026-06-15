@@ -57,11 +57,11 @@ export default function Home() {
   };
 
   return (
-    <main className="grid h-svh grid-cols-3">
+    <main className="grid h-svh grid-cols-3 overflow-hidden">
       <section></section>
-      <section className="min-w-0">
-        <Card className="h-full w-full rounded-none border-0">
-          <CardContent className="flex-1 space-y-3 overflow-y-auto py-4">
+      <section className="min-h-0 min-w-0 overflow-hidden">
+        <Card className="flex h-full w-full flex-col rounded-none border-0">
+          <CardContent className="min-h-0 flex-1 space-y-3 overflow-y-auto py-4">
             {messages.map((message, index) => (
               <div
                 className={cn(
@@ -84,7 +84,7 @@ export default function Home() {
             ))}
           </CardContent>
 
-          <CardFooter>
+          <CardFooter className="shrink-0">
             <Textarea
               className="h-12 min-h-12 resize-none"
               onChange={(event) => setDraft(event.target.value)}
