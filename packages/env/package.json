@@ -13,6 +13,7 @@
   },
   "devDependencies": {
     "@alchemist-ai/config": "workspace:*",
+    "@types/node": "^20",
     "typescript": "catalog:"
   }
 }
