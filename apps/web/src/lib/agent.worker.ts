@@ -12,8 +12,13 @@ type WorkerState = {
   idleTimer?: Timer;
   resumeTimer?: Timer;
   reconnectTimer?: Timer;
+  restartTimer?: Timer;
   reconnectDelayMs: number;
   lastAppliedSeq: number;
+  lastUserMessage?: string;
+  renderedText: string;
+  restartSkipText: string;
+  restartSuppressToolEvents: boolean;
   streamEndSeq: number | null;
   turnActive: boolean;
   ackedToolCalls: Set<string>;
@@ -24,6 +29,9 @@ type WorkerState = {
 const state: WorkerState = {
   reconnectDelayMs: 500,
   lastAppliedSeq: 0,
+  renderedText: "",
+  restartSkipText: "",
+  restartSuppressToolEvents: false,
   streamEndSeq: null,
   turnActive: false,
   ackedToolCalls: new Set(),
@@ -35,6 +43,7 @@ const LATENCY_SPIKE_AFTER_MS = 2000;
 const MAX_RECONNECT_AFTER_MS = 10000;
 const RESUME_WHEN_STALLED_MS = 1500;
 const MISSING_STREAM_END_AFTER_MS = 8000;
+const RESTART_AFTER_RESUME_STALL_MS = 3500;
 
 function markActive() {
   self.postMessage({ kind: "connection", status: "streaming" });
@@ -72,6 +81,7 @@ function markConnected() {
   clearTimeout(state.idleTimer);
   clearTimeout(state.resumeTimer);
   clearTimeout(state.reconnectTimer);
+  clearTimeout(state.restartTimer);
   state.reconnectDelayMs = 500;
   self.postMessage({ kind: "connection", status: "connected" });
 }
@@ -99,11 +109,66 @@ function resumeTurn() {
   scheduleResume();
 }
 
+function scheduleRestartAfterResumeStall() {
+  clearTimeout(state.restartTimer);
+  state.restartTimer = setTimeout(() => {
+    if (!state.turnActive || state.streamEndSeq !== null) {
+      return;
+    }
+    if (!state.lastUserMessage || state.socket?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    state.sequenceGate.startTurn();
+    state.ackedToolCalls.clear();
+    state.answeredPingSeqs.clear();
+    clearTimeout(state.resumeTimer);
+    state.lastAppliedSeq = 0;
+    state.streamEndSeq = null;
+    state.restartSkipText = state.renderedText;
+    state.restartSuppressToolEvents = true;
+    state.socket.send(
+      JSON.stringify({ type: "USER_MESSAGE", content: state.lastUserMessage }),
+    );
+    traceOut("USER_MESSAGE", "restart after stalled resume");
+    scheduleResume();
+  }, RESTART_AFTER_RESUME_STALL_MS);
+}
+
+function applyToken(text: string) {
+  if (!state.restartSkipText) {
+    state.restartSuppressToolEvents = false;
+    state.renderedText += text;
+    self.postMessage({ kind: "token", text });
+    return;
+  }
+
+  if (state.restartSkipText.startsWith(text)) {
+    state.restartSkipText = state.restartSkipText.slice(text.length);
+    return;
+  }
+
+  if (text.startsWith(state.restartSkipText)) {
+    const newText = text.slice(state.restartSkipText.length);
+    state.restartSkipText = "";
+    state.renderedText += newText;
+    if (newText) {
+      state.restartSuppressToolEvents = false;
+      self.postMessage({ kind: "token", text: newText });
+    }
+    return;
+  }
+
+  state.restartSkipText = "";
+  state.restartSuppressToolEvents = false;
+  state.renderedText += text;
+  self.postMessage({ kind: "token", text });
+}
+
 function applyMessage(message: ServerMessage) {
   switch (message.type) {
     case "TOKEN":
       markActive();
-      self.postMessage({ kind: "token", text: message.text });
+      applyToken(message.text);
       break;
     case "CONTEXT_SNAPSHOT":
       markActive();
@@ -115,6 +180,9 @@ function applyMessage(message: ServerMessage) {
       break;
     case "TOOL_CALL":
       markActive();
+      if (state.restartSkipText || state.restartSuppressToolEvents) {
+        break;
+      }
       self.postMessage({
         kind: "tool_call",
         call_id: message.call_id,
@@ -124,6 +192,9 @@ function applyMessage(message: ServerMessage) {
       break;
     case "TOOL_RESULT":
       markActive();
+      if (state.restartSkipText || state.restartSuppressToolEvents) {
+        break;
+      }
       self.postMessage({
         kind: "tool_result",
         call_id: message.call_id,
@@ -134,6 +205,8 @@ function applyMessage(message: ServerMessage) {
       break;
     case "STREAM_END":
       state.turnActive = false;
+      state.restartSkipText = "";
+      state.restartSuppressToolEvents = false;
       markConnected();
       break;
     case "ERROR":
@@ -165,6 +238,7 @@ function connect(resume: boolean) {
     markConnected();
     if (resume) {
       resumeTurn();
+      scheduleRestartAfterResumeStall();
       return;
     }
     const queued = state.queued;
@@ -174,29 +248,33 @@ function connect(resume: boolean) {
     sendTurn(queued);
     state.queued = undefined;
   };
-  currentSocket.onclose = () => {
+
+  function disconnected() {
     if (state.socket !== currentSocket) {
       return;
     }
+    currentSocket.onclose = null;
+    currentSocket.onerror = null;
     clearTimeout(state.waitTimer);
     clearTimeout(state.idleTimer);
     clearTimeout(state.resumeTimer);
+    clearTimeout(state.restartTimer);
     if (state.turnActive) {
       scheduleReconnect();
     }
     self.postMessage({ kind: "connection", status: "disconnected" });
+    self.postMessage({
+      kind: "notification",
+      type: "error",
+      message: "Server disconnected",
+    });
+  }
+
+  currentSocket.onclose = () => {
+    disconnected();
   };
   currentSocket.onerror = () => {
-    if (state.socket !== currentSocket) {
-      return;
-    }
-    clearTimeout(state.waitTimer);
-    clearTimeout(state.idleTimer);
-    clearTimeout(state.resumeTimer);
-    if (state.turnActive) {
-      scheduleReconnect();
-    }
-    self.postMessage({ kind: "connection", status: "disconnected" });
+    disconnected();
   };
   currentSocket.onmessage = (event: MessageEvent<string>) => {
     if (state.socket !== currentSocket) {
@@ -221,10 +299,15 @@ function connect(resume: boolean) {
     if (message.type === "PING" && !state.answeredPingSeqs.has(message.seq)) {
       state.answeredPingSeqs.add(message.seq);
       trace(message, receivedAt);
-      currentSocket.send(JSON.stringify({ type: "PONG", echo: message.challenge }));
+      currentSocket.send(
+        JSON.stringify({ type: "PONG", echo: message.challenge }),
+      );
       traceOut("PONG", `echo ${message.challenge || "(empty)"}`);
     }
-    if (message.type === "TOOL_CALL" && !state.ackedToolCalls.has(message.call_id)) {
+    if (
+      message.type === "TOOL_CALL" &&
+      !state.ackedToolCalls.has(message.call_id)
+    ) {
       state.ackedToolCalls.add(message.call_id);
       currentSocket.send(
         JSON.stringify({ type: "TOOL_ACK", call_id: message.call_id }),
@@ -240,7 +323,10 @@ function connect(resume: boolean) {
       if (orderedMessage.type !== "PING") {
         state.lastAppliedSeq = orderedMessage.seq;
       }
-      if (orderedMessage.type !== "PING" && orderedMessage.type !== "STREAM_END") {
+      if (
+        orderedMessage.type !== "PING" &&
+        orderedMessage.type !== "STREAM_END"
+      ) {
         scheduleResume();
       }
     }
@@ -249,6 +335,7 @@ function connect(resume: boolean) {
 
 function scheduleReconnect() {
   clearTimeout(state.reconnectTimer);
+  clearTimeout(state.restartTimer);
   self.postMessage({ kind: "connection", status: "reconnecting" });
   state.reconnectTimer = setTimeout(
     () => connect(state.queued === undefined),
@@ -266,12 +353,17 @@ function startTurn() {
   state.answeredPingSeqs.clear();
   state.reconnectDelayMs = 500;
   state.lastAppliedSeq = 0;
+  state.renderedText = "";
+  state.restartSkipText = "";
+  state.restartSuppressToolEvents = false;
   state.streamEndSeq = null;
   state.turnActive = true;
 }
 
 function sendUserMessage(content: string) {
   clearTimeout(state.reconnectTimer);
+  clearTimeout(state.restartTimer);
+  state.lastUserMessage = content;
   startTurn();
   if (state.socket?.readyState === WebSocket.OPEN) {
     sendTurn(content);

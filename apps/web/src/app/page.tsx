@@ -14,7 +14,8 @@ import { TraceSidebar } from "@/components/trace-sidebar";
 import { useChatStore } from "@/lib/chat-store";
 import type { ConnectionStatus, WorkerEvent } from "@/lib/worker-events";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@alchemist-ai/ui/components/sidebar";
-import { Send } from "lucide-react";
+import { Loader2, Send } from "lucide-react";
+import { toast } from "sonner";
 import { useEffect, useRef, useState } from "react";
 
 type TraceEvent = Extract<WorkerEvent, { kind: "trace" }>;
@@ -25,6 +26,7 @@ export default function Home() {
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("idle");
   const [traceEvents, setTraceEvents] = useState<TraceEvent[]>([]);
+  const [awaitingResponse, setAwaitingResponse] = useState(false);
   const messageList = useRef<HTMLDivElement | null>(null);
   const worker = useRef<Worker | null>(null);
   const messages = useChatStore((state) => state.messages);
@@ -36,6 +38,9 @@ export default function Home() {
   const setToolResult = useChatStore((state) => state.setToolResult);
   const setContext = useChatStore((state) => state.setContext);
   const selectContext = useChatStore((state) => state.selectContext);
+  const serverResponding =
+    awaitingResponse ||
+    ["streaming", "waiting", "reconnecting"].includes(connectionStatus);
 
   useEffect(() => {
     worker.current = new Worker(
@@ -47,10 +52,19 @@ export default function Home() {
           {
             const traceEvent = event.data;
             setTraceEvents((events) => [...events, traceEvent]);
+            if (traceEvent.type === "STREAM_END" || traceEvent.type === "ERROR") {
+              setAwaitingResponse(false);
+            }
           }
           break;
         case "connection":
+          if (event.data.status === "disconnected") {
+            setAwaitingResponse(false);
+          }
           setConnectionStatus(event.data.status);
+          break;
+        case "notification":
+          toast.error(event.data.message);
           break;
         case "token":
           appendToken(event.data.text);
@@ -86,8 +100,9 @@ export default function Home() {
 
   const submit = () => {
     const content = draft.trim();
-    if (!content) return;
+    if (!content || serverResponding) return;
     addUserMessage(content);
+    setAwaitingResponse(true);
     worker.current?.postMessage({ type: "send", content });
     setDraft("");
   };
@@ -124,11 +139,11 @@ export default function Home() {
                 />
                 <Button
                   className="h-12 w-12"
-                  disabled={!draft.trim()}
+                  disabled={!draft.trim() || serverResponding}
                   onClick={submit}
                   size="icon"
                 >
-                  <Send />
+                  {serverResponding ? <Loader2 className="animate-spin" /> : <Send />}
                 </Button>
               </CardFooter>
             </Card>

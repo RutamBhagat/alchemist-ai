@@ -18,6 +18,7 @@ export type ConnectionStatus =
 export type WorkerEvent =
   | ScriptTokenEvent
   | ScriptContextEvent
+  | { kind: "notification"; type: "error"; message: string }
   | { kind: "connection"; status: ConnectionStatus }
   | {
       kind: "trace";

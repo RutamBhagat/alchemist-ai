@@ -1,6 +1,7 @@
 "use client";
 
 import { Sidebar, SidebarContent, SidebarGroupContent, SidebarHeader, SidebarRail } from "@alchemist-ai/ui/components/sidebar";
+import { cn } from "@alchemist-ai/ui/lib/utils";
 import type { WorkerEvent } from "@/lib/worker-events";
 import { Activity, Check, ChevronsRight, Radio, Wrench } from "lucide-react";
 import { useEffect, useRef } from "react";
@@ -60,7 +61,14 @@ function Row({ row }: { row: TraceRow }) {
   const Icon = icons[event.type as keyof typeof icons] ?? Activity;
   const chain = event.call_id && event.type !== "TOOL_CALL";
   return (
-    <div className={`border-l px-2 py-1.5 text-xs ${chain ? "ml-4" : ""}`}>
+    <div
+      className={cn(
+        "border-l px-2 py-1.5 text-xs",
+        chain && "ml-4",
+        event.type === "STREAM_END" &&
+          "border-emerald-500 bg-emerald-50 text-emerald-950",
+      )}
+    >
       <div className="flex items-center gap-2">
         <Icon className="size-3 shrink-0" />
         <span className="min-w-0 flex-1 truncate font-medium">{rowText(row)}</span>
