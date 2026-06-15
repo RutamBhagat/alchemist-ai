@@ -12,6 +12,10 @@ import { ConnectionPill } from "@/components/connection-pill";
 import { ContextSidebar } from "@/components/context-sidebar";
 import { TraceSidebar } from "@/components/trace-sidebar";
 import { useChatStore } from "@/lib/chat-store";
+import {
+  appendTraceEvent,
+  emptyTraceRowsState,
+} from "@/lib/trace-rows";
 import type { ConnectionStatus, WorkerEvent } from "@/lib/worker-events";
 import {
   SidebarInset,
@@ -23,14 +27,12 @@ import { toast } from "sonner";
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 
-type TraceEvent = Extract<WorkerEvent, { kind: "trace" }>;
-
 export default function Home() {
   const [draft, setDraft] = useState("");
   const [autoScroll] = useState(process.env.NODE_ENV === "development");
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("idle");
-  const [traceEvents, setTraceEvents] = useState<TraceEvent[]>([]);
+  const [traceRowsState, setTraceRowsState] = useState(emptyTraceRowsState);
   const [selectedTraceTarget, setSelectedTraceTarget] = useState<string | null>(
     null,
   );
@@ -59,7 +61,7 @@ export default function Home() {
         case "trace":
           {
             const traceEvent = event.data;
-            setTraceEvents((events) => [...events, traceEvent]);
+            setTraceRowsState((state) => appendTraceEvent(state, traceEvent));
             if (
               traceEvent.type === "STREAM_END" ||
               traceEvent.type === "ERROR"
@@ -144,8 +146,9 @@ export default function Home() {
       style={{ "--sidebar-width": "30rem" } as CSSProperties}
     >
       <TraceSidebar
-        events={traceEvents}
+        eventTypes={traceRowsState.eventTypes}
         onSelectTarget={selectTraceTarget}
+        rows={traceRowsState.rows}
         selectedTarget={selectedTraceTarget}
       />
       <SidebarInset>

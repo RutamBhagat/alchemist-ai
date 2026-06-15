@@ -17,7 +17,7 @@ import {
   SidebarRail,
 } from "@alchemist-ai/ui/components/sidebar";
 import { cn } from "@alchemist-ai/ui/lib/utils";
-import type { WorkerEvent } from "@/lib/worker-events";
+import type { TraceRow } from "@/lib/trace-rows";
 import {
   Activity,
   Check,
@@ -27,12 +27,6 @@ import {
   Wrench,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-
-type TraceEvent = Extract<WorkerEvent, { kind: "trace" }>;
-type TraceRow =
-  | TraceEvent
-  | { kind: "token_group"; items: TraceEvent[] }
-  | { kind: "tool_group"; call: TraceEvent; ack?: TraceEvent; result?: TraceEvent };
 
 const icons = {
   TOKEN: Activity,
@@ -53,45 +47,6 @@ const time = (at: number) =>
     second: "2-digit",
     fractionalSecondDigits: 3,
   });
-
-function rows(events: TraceEvent[]) {
-  const grouped: TraceRow[] = [];
-  const acks = new Map<string, TraceEvent>();
-  for (const event of events) {
-    const last = grouped.at(-1);
-    if (
-      event.type === "TOKEN" &&
-      last?.kind === "token_group" &&
-      last.items.at(-1)?.stream_id === event.stream_id
-    ) {
-      last.items.push(event);
-    } else if (event.type === "TOKEN") {
-      grouped.push({ kind: "token_group", items: [event] });
-    } else if (event.type === "TOOL_ACK" && event.call_id) {
-      acks.set(event.call_id, event);
-    } else if (event.type === "TOOL_CALL" && event.call_id) {
-      grouped.push({
-        kind: "tool_group",
-        call: event,
-        ack: acks.get(event.call_id),
-      });
-      acks.delete(event.call_id);
-    } else if (event.type === "TOOL_RESULT") {
-      const tool = grouped.findLast(
-        (row) => row.kind === "tool_group" && row.call.call_id === event.call_id,
-      );
-      if (tool?.kind === "tool_group" && !tool.result) {
-        tool.result = event;
-      } else {
-        grouped.push(event);
-      }
-    } else {
-      grouped.push(event);
-    }
-  }
-  grouped.push(...acks.values());
-  return grouped;
-}
 
 function rowText(row: TraceRow) {
   if (row.kind === "tool_group") return row.call.label;
@@ -256,26 +211,23 @@ function Row({
 }
 
 export function TraceSidebar({
-  events,
+  eventTypes,
   onSelectTarget,
+  rows,
   selectedTarget,
 }: {
-  events: TraceEvent[];
+  eventTypes: string[];
   onSelectTarget: (target: string) => void;
+  rows: TraceRow[];
   selectedTarget: string | null;
 }) {
   const list = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [type, setType] = useState("all");
   const [query, setQuery] = useState("");
-  const eventTypes = useMemo(
-    () => Array.from(new Set(events.map((event) => event.type))).sort(),
-    [events],
-  );
-  const allRows = useMemo(() => rows(events), [events]);
   const targets = useMemo(() => {
     return new Map(
-      allRows.flatMap((row) => {
+      rows.flatMap((row) => {
         const event = rowEvent(row);
         const callId = rowCallId(row);
         if (callId) return [[rowId(row), `call:${callId}`]];
@@ -283,8 +235,8 @@ export function TraceSidebar({
         return [];
       }),
     );
-  }, [allRows]);
-  const visibleRows = allRows.filter((row) => {
+  }, [rows]);
+  const visibleRows = rows.filter((row) => {
     const items =
       row.kind === "token_group"
         ? row.items
@@ -300,7 +252,7 @@ export function TraceSidebar({
   useEffect(() => {
     if (!list.current) return;
     list.current.scrollTop = list.current.scrollHeight;
-  }, [events]);
+  }, [rows]);
 
   useEffect(() => {
     if (!selectedTarget) return;
