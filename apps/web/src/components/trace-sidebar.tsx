@@ -3,6 +3,7 @@
 import { Sidebar, SidebarContent, SidebarGroupContent, SidebarRail } from "@alchemist-ai/ui/components/sidebar";
 import type { WorkerEvent } from "@/lib/worker-events";
 import { Activity, Check, ChevronsRight, Radio, Wrench } from "lucide-react";
+import { useEffect, useRef } from "react";
 
 type TraceEvent = Extract<WorkerEvent, { kind: "trace" }>;
 type TraceRow = TraceEvent | { kind: "token_group"; items: TraceEvent[] };
@@ -75,9 +76,15 @@ function Row({ row }: { row: TraceRow }) {
 }
 
 export function TraceSidebar({ events }: { events: TraceEvent[] }) {
+  const list = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!list.current) return;
+    list.current.scrollTop = list.current.scrollHeight;
+  }, [events]);
+
   return (
     <Sidebar collapsible="offcanvas" side="left">
-      <SidebarContent>
+      <SidebarContent ref={list}>
         <SidebarGroupContent className="space-y-1 p-2">
           {rows(events).map((row) => {
             const id = row.kind === "token_group" ? row.items[0].id : row.id;
