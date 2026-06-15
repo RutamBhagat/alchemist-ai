@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import JsonView from "@uiw/react-json-view";
 import { VirtualDiffViewer } from "virtual-react-json-diff";
 import type { ContextSlot } from "@/lib/chat-store";
 
@@ -51,7 +52,17 @@ export function ContextSidebar({
             ))}
           </div>
           <div className="min-h-0 flex-1 overflow-hidden" ref={viewerRef}>
-            {slot && height > 0 ? (
+            {slot && !slot.previous ? (
+              <div className="h-full overflow-auto rounded border bg-background p-2 text-xs">
+                <JsonView
+                  collapsed={2}
+                  displayDataTypes={false}
+                  enableClipboard={false}
+                  shortenTextAfterLength={80}
+                  value={slot.current.data}
+                />
+              </div>
+            ) : slot && height > 0 ? (
               <VirtualDiffViewer
                 className="min-w-0 text-xs"
                 height={height}
@@ -59,8 +70,6 @@ export function ContextSidebar({
                 newValue={slot.current.data}
                 oldValue={slot.previous?.data ?? {}}
                 rightTitle="Current"
-                showLineCount
-                showSingleMinimap
               />
             ) : null}
           </div>
