@@ -46,7 +46,9 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) => {
       const messages = [...state.messages];
       const last = messages.at(-1);
-      if (!last || last.role !== "agent") return state;
+      if (!last || last.role !== "agent") {
+        return state;
+      }
       const parts = [...last.parts];
       const previous = parts.at(-1);
       if (previous?.kind === "text") {
@@ -61,7 +63,9 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) => {
       const messages = [...state.messages];
       const last = messages.at(-1);
-      if (!last || last.role !== "agent") return state;
+      if (!last || last.role !== "agent") {
+        return state;
+      }
       messages[messages.length - 1] = {
         ...last,
         parts: [...last.parts, { kind: "tool_call", tool }],

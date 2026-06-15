@@ -19,7 +19,9 @@ export function createSequenceGate() {
         return [];
       }
 
-      if (processed.has(message.seq) || pending.has(message.seq)) return [];
+      if (processed.has(message.seq) || pending.has(message.seq)) {
+        return [];
+      }
 
       pending.set(message.seq, message);
 

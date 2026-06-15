@@ -1,3 +1,4 @@
+import { trace, traceOut } from "./agent-trace";
 import { serverMessageSchema } from "./protocol";
 import { createSequenceGate } from "./sequence-gate";
 import type { ServerMessage } from "../../../agent-server/src/types";
@@ -15,7 +16,6 @@ let reconnectDelayMs = 500;
 let lastAppliedSeq = 0;
 let streamEndSeq: number | null = null;
 let turnActive = false;
-let traceId = 0;
 const ackedToolCalls = new Set<string>();
 const answeredPingSeqs = new Set<number>();
 const sequenceGate = createSequenceGate();
@@ -25,96 +25,79 @@ const MAX_RECONNECT_AFTER_MS = 10000;
 const RESUME_WHEN_STALLED_MS = 1500;
 const MISSING_STREAM_END_AFTER_MS = 8000;
 
-const post = (message: WorkerEvent) => self.postMessage(message);
-const trace = (
-  message: ServerMessage,
-  at: number,
-  label = "text" in message ? message.text : message.type,
-) =>
-  post({
-    kind: "trace",
-    id: ++traceId,
-    at,
-    direction: "in",
-    type: message.type,
-    seq: message.seq,
-    stream_id: "stream_id" in message ? message.stream_id : undefined,
-    call_id: "call_id" in message ? message.call_id : undefined,
-    text: "text" in message ? message.text : undefined,
-    label,
-  });
-const traceOut = (
-  type: "PONG" | "TOOL_ACK" | "USER_MESSAGE" | "RESUME",
-  label: string,
-  call_id?: string,
-) =>
-  post({
-    kind: "trace",
-    id: ++traceId,
-    at: performance.now(),
-    direction: "out",
-    type,
-    call_id,
-    label,
-  });
-const setStatus = (status: ConnectionStatus) => {
-  post({ kind: "connection", status });
-};
+function post(message: WorkerEvent) {
+  self.postMessage(message);
+}
 
-const markActive = () => {
+function setStatus(status: ConnectionStatus) {
+  post({ kind: "connection", status });
+}
+
+function markActive() {
   setStatus("streaming");
   clearTimeout(waitTimer);
   clearTimeout(idleTimer);
   // Chaos latency spikes pause delivery for at least 2s. This is only a stalled-stream hint; real disconnects come from WebSocket close/error.
   waitTimer = setTimeout(() => setStatus("waiting"), LATENCY_SPIKE_AFTER_MS);
   idleTimer = setTimeout(markConnected, MISSING_STREAM_END_AFTER_MS);
-};
+}
 
-const clearResumeTimer = () => clearTimeout(resumeTimer);
-const clearReconnectTimer = () => clearTimeout(reconnectTimer);
+function clearResumeTimer() {
+  clearTimeout(resumeTimer);
+}
 
-const scheduleResume = () => {
-  if (!turnActive || streamEndSeq !== null) return;
+function clearReconnectTimer() {
+  clearTimeout(reconnectTimer);
+}
+
+function scheduleResume() {
+  if (!turnActive || streamEndSeq !== null) {
+    return;
+  }
   clearResumeTimer();
   resumeTimer = setTimeout(() => {
-    if (!turnActive || streamEndSeq !== null) return;
-    if (socket?.readyState !== WebSocket.OPEN) return;
+    if (!turnActive || streamEndSeq !== null) {
+      return;
+    }
+    if (socket?.readyState !== WebSocket.OPEN) {
+      return;
+    }
     socket.send(JSON.stringify({ type: "RESUME", last_seq: lastAppliedSeq }));
     scheduleResume();
   }, RESUME_WHEN_STALLED_MS);
-};
+}
 
-const markConnected = () => {
+function markConnected() {
   clearTimeout(waitTimer);
   clearTimeout(idleTimer);
   clearResumeTimer();
   clearReconnectTimer();
   reconnectDelayMs = 500;
   setStatus("connected");
-};
+}
 
-const parseServerMessage = (data: string): ServerMessage | null => {
+function parseServerMessage(data: string): ServerMessage | null {
   try {
     const result = serverMessageSchema.safeParse(JSON.parse(data));
     return result.success ? result.data : null;
   } catch {
     return null;
   }
-};
+}
 
-const sendTurn = (content: string) => {
+function sendTurn(content: string) {
   socket?.send(JSON.stringify({ type: "USER_MESSAGE", content }));
   traceOut("USER_MESSAGE", content);
   scheduleResume();
-};
+}
 
-const resumeTurn = () => {
+function resumeTurn() {
   socket?.send(JSON.stringify({ type: "RESUME", last_seq: lastAppliedSeq }));
   traceOut("RESUME", `last_seq ${lastAppliedSeq}`);
   scheduleResume();
-};
+}
 
-const applyMessage = (message: ServerMessage) => {
+function applyMessage(message: ServerMessage) {
   switch (message.type) {
     case "TOKEN":
       markActive();
@@ -154,9 +137,9 @@ const applyMessage = (message: ServerMessage) => {
     case "ERROR":
       break;
   }
-};
+}
 
-const connect = (resume: boolean) => {
+function connect(resume: boolean) {
   const previousSocket = socket;
   if (
     previousSocket &&
@@ -174,42 +157,60 @@ const connect = (resume: boolean) => {
   const currentSocket = new WebSocket("ws://localhost:4747/ws");
   socket = currentSocket;
   currentSocket.onopen = () => {
-    if (socket !== currentSocket) return;
+    if (socket !== currentSocket) {
+      return;
+    }
     markConnected();
     if (resume) {
       resumeTurn();
       return;
     }
-    if (!queued) return;
+    if (!queued) {
+      return;
+    }
     sendTurn(queued);
     queued = undefined;
   };
   currentSocket.onclose = () => {
-    if (socket !== currentSocket) return;
+    if (socket !== currentSocket) {
+      return;
+    }
     clearTimeout(waitTimer);
     clearTimeout(idleTimer);
     clearResumeTimer();
-    if (turnActive) scheduleReconnect();
+    if (turnActive) {
+      scheduleReconnect();
+    }
     setStatus("disconnected");
   };
   currentSocket.onerror = () => {
-    if (socket !== currentSocket) return;
+    if (socket !== currentSocket) {
+      return;
+    }
     clearTimeout(waitTimer);
     clearTimeout(idleTimer);
     clearResumeTimer();
-    if (turnActive) scheduleReconnect();
+    if (turnActive) {
+      scheduleReconnect();
+    }
     setStatus("disconnected");
   };
   currentSocket.onmessage = (event: MessageEvent<string>) => {
-    if (socket !== currentSocket) return;
+    if (socket !== currentSocket) {
+      return;
+    }
     const receivedAt = performance.now();
     const message = parseServerMessage(event.data);
-    if (!message) return;
+    if (!message) {
+      return;
+    }
 
     if (message.type === "STREAM_END") {
       streamEndSeq = message.seq;
       clearResumeTimer();
-      if (message.seq > lastAppliedSeq + 1) resumeTurn();
+      if (message.seq > lastAppliedSeq + 1) {
+        resumeTurn();
+      }
     }
 
     // Heartbeats are liveness checks, so PING must be answered immediately.
@@ -229,7 +230,9 @@ const connect = (resume: boolean) => {
     }
 
     for (const orderedMessage of sequenceGate.accept(message)) {
-      if (orderedMessage.type !== "PING") trace(orderedMessage, receivedAt);
+      if (orderedMessage.type !== "PING") {
+        trace(orderedMessage, receivedAt);
+      }
       applyMessage(orderedMessage);
       if (orderedMessage.type !== "PING") {
         lastAppliedSeq = orderedMessage.seq;
@@ -239,16 +242,16 @@ const connect = (resume: boolean) => {
       }
     }
   };
-};
+}
 
-const scheduleReconnect = () => {
+function scheduleReconnect() {
   clearReconnectTimer();
   setStatus("reconnecting");
   reconnectTimer = setTimeout(() => connect(queued === undefined), reconnectDelayMs);
   reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_AFTER_MS);
-};
+}
 
-const sendUserMessage = (content: string) => {
+function sendUserMessage(content: string) {
   clearReconnectTimer();
   sequenceGate.startTurn();
   ackedToolCalls.clear();
@@ -263,10 +266,14 @@ const sendUserMessage = (content: string) => {
   }
 
   queued = content;
-  if (socket?.readyState === WebSocket.CONNECTING) return;
+  if (socket?.readyState === WebSocket.CONNECTING) {
+    return;
+  }
   connect(false);
-};
+}
 
 self.onmessage = (event: MessageEvent<UiToWorker>) => {
-  if (event.data.type === "send") sendUserMessage(event.data.content);
+  if (event.data.type === "send") {
+    sendUserMessage(event.data.content);
+  }
 };
