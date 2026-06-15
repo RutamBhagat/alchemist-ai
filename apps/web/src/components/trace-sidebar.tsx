@@ -4,7 +4,7 @@ import { Sidebar, SidebarContent, SidebarGroupContent, SidebarHeader, SidebarRai
 import { cn } from "@alchemist-ai/ui/lib/utils";
 import type { WorkerEvent } from "@/lib/worker-events";
 import { Activity, Check, ChevronsRight, Radio, Wrench } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type TraceEvent = Extract<WorkerEvent, { kind: "trace" }>;
 type TraceRow = TraceEvent | { kind: "token_group"; items: TraceEvent[] };
@@ -57,9 +57,12 @@ function rowText(row: TraceRow) {
 }
 
 function Row({ row }: { row: TraceRow }) {
+  const [open, setOpen] = useState(false);
   const event = row.kind === "token_group" ? row.items[0] : row;
   const Icon = icons[event.type as keyof typeof icons] ?? Activity;
   const chain = event.call_id && event.type !== "TOOL_CALL";
+  const fullText =
+    row.kind === "token_group" ? row.items.map((item) => item.text).join("") : "";
   return (
     <div
       className={cn(
@@ -69,16 +72,21 @@ function Row({ row }: { row: TraceRow }) {
           "border-emerald-500 bg-emerald-50 text-emerald-950",
       )}
     >
-      <div className="flex items-center gap-2">
+      <button
+        className="flex w-full items-center gap-2 text-left"
+        onClick={() => row.kind === "token_group" && setOpen((value) => !value)}
+        type="button"
+      >
         <Icon className="size-3 shrink-0" />
         <span className="min-w-0 flex-1 truncate font-medium">{rowText(row)}</span>
         <span className="font-mono text-muted-foreground">{time(event.at)}</span>
-      </div>
+      </button>
       <div className="mt-1 truncate pl-5 font-mono text-muted-foreground">
         {event.seq ? `#${event.seq} ` : ""}
         {event.call_id ? `${event.call_id} ` : ""}
         {event.stream_id ?? event.direction} · {event.type}
       </div>
+      {open && <pre className="mt-2 whitespace-pre-wrap pl-5 font-mono">{fullText}</pre>}
     </div>
   );
 }
