@@ -25,6 +25,13 @@ const sendUserMessage = (content: string) => {
     const result = serverMessageSchema.safeParse(JSON.parse(event.data));
     if (!result.success) return;
 
+    // Heartbeats are liveness checks, so PING must be answered immediately.
+    // If we wait for seq-order processing/replay buffering, an out-of-order
+    // PING can sit behind missing messages long enough for the server to drop us.
+    if (result.data.type === "PING") {
+      socket?.send(JSON.stringify({ type: "PONG", echo: result.data.challenge }));
+    }
+
     switch (result.data.type) {
       case "TOKEN":
         post({ kind: "token", text: result.data.text });
@@ -51,9 +58,6 @@ const sendUserMessage = (content: string) => {
           call_id: result.data.call_id,
           result: result.data.result,
         });
-        break;
-      case "PING":
-        socket?.send(JSON.stringify({ type: "PONG", echo: result.data.challenge }));
         break;
     }
   };
