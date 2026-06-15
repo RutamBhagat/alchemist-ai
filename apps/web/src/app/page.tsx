@@ -8,14 +8,17 @@ import {
 } from "@alchemist-ai/ui/components/card";
 import { Textarea } from "@alchemist-ai/ui/components/textarea";
 import { ChatMessage } from "@/components/chat-message";
+import { ConnectionPill } from "@/components/connection-pill";
 import { ContextSidebar } from "@/components/context-sidebar";
 import { useChatStore } from "@/lib/chat-store";
-import type { WorkerEvent } from "@/lib/worker-events";
+import type { ConnectionStatus, WorkerEvent } from "@/lib/worker-events";
 import { Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 export default function Home() {
   const [draft, setDraft] = useState("");
+  const [connectionStatus, setConnectionStatus] =
+    useState<ConnectionStatus>("idle");
   const worker = useRef<Worker | null>(null);
   const messages = useChatStore((state) => state.messages);
   const contexts = useChatStore((state) => state.contexts);
@@ -33,6 +36,9 @@ export default function Home() {
     );
     worker.current.onmessage = (event: MessageEvent<WorkerEvent>) => {
       switch (event.data.kind) {
+        case "connection":
+          setConnectionStatus(event.data.status);
+          break;
         case "token":
           appendToken(event.data.text);
           break;
@@ -68,6 +74,7 @@ export default function Home() {
 
   return (
     <main className="grid h-svh grid-cols-3 overflow-hidden">
+      <ConnectionPill status={connectionStatus} />
       <section></section>
       <section className="min-h-0 min-w-0 overflow-hidden">
         <Card className="flex h-full w-full flex-col rounded-none border-0">

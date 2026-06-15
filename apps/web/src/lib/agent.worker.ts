@@ -1,12 +1,29 @@
 import { serverMessageSchema } from "./protocol";
-import type { WorkerEvent } from "./worker-events";
+import type { ConnectionStatus, WorkerEvent } from "./worker-events";
 
 type UiToWorker = { type: "send"; content: string };
 
 let socket: WebSocket | undefined;
 let queued: string | undefined;
+let waitTimer: ReturnType<typeof setTimeout> | undefined;
+
+const LATENCY_SPIKE_AFTER_MS = 2000;
 
 const post = (message: WorkerEvent) => self.postMessage(message);
+const setStatus = (status: ConnectionStatus) => post({ kind: "connection", status });
+
+const markActive = () => {
+  setStatus("streaming");
+  clearTimeout(waitTimer);
+  // Chaos latency spikes pause delivery for at least 2s. This is only a
+  // stalled-stream hint; real disconnects come from WebSocket close/error.
+  waitTimer = setTimeout(() => setStatus("waiting"), LATENCY_SPIKE_AFTER_MS);
+};
+
+const markConnected = () => {
+  clearTimeout(waitTimer);
+  setStatus("connected");
+};
 
 const sendUserMessage = (content: string) => {
   if (socket?.readyState === WebSocket.OPEN) {
@@ -15,11 +32,21 @@ const sendUserMessage = (content: string) => {
   }
 
   queued = content;
+  setStatus("connecting");
   socket = new WebSocket("ws://localhost:4747/ws");
   socket.onopen = () => {
+    markConnected();
     if (!queued) return;
     socket?.send(JSON.stringify({ type: "USER_MESSAGE", content: queued }));
     queued = undefined;
+  };
+  socket.onclose = () => {
+    clearTimeout(waitTimer);
+    setStatus("disconnected");
+  };
+  socket.onerror = () => {
+    clearTimeout(waitTimer);
+    setStatus("disconnected");
   };
   socket.onmessage = (event: MessageEvent<string>) => {
     const result = serverMessageSchema.safeParse(JSON.parse(event.data));
@@ -34,9 +61,11 @@ const sendUserMessage = (content: string) => {
 
     switch (result.data.type) {
       case "TOKEN":
+        markActive();
         post({ kind: "token", text: result.data.text });
         break;
       case "CONTEXT_SNAPSHOT":
+        markActive();
         post({
           kind: "context",
           context_id: result.data.context_id,
@@ -44,6 +73,7 @@ const sendUserMessage = (content: string) => {
         });
         break;
       case "TOOL_CALL":
+        markActive();
         socket?.send(JSON.stringify({ type: "TOOL_ACK", call_id: result.data.call_id }));
         post({
           kind: "tool_call",
@@ -53,11 +83,15 @@ const sendUserMessage = (content: string) => {
         });
         break;
       case "TOOL_RESULT":
+        markActive();
         post({
           kind: "tool_result",
           call_id: result.data.call_id,
           result: result.data.result,
         });
+        break;
+      case "STREAM_END":
+        markConnected();
         break;
     }
   };
