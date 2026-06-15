@@ -5,24 +5,39 @@ import {
   Card,
   CardContent,
   CardFooter,
-  CardHeader,
-  CardTitle,
 } from "@alchemist-ai/ui/components/card";
 import { Textarea } from "@alchemist-ai/ui/components/textarea";
 import { cn } from "@alchemist-ai/ui/lib/utils";
+import { useChatStore } from "@/lib/chat-store";
 import { Send } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-const messages = [
-  { role: "user", text: "Find recent context and summarize it." },
-  {
-    role: "agent",
-    text: "I found the relevant context. I’ll stream results here and keep tool calls inline when they happen.",
-  },
-];
+type WorkerEvent = { kind: "token"; text: string };
 
 export default function Home() {
   const [draft, setDraft] = useState("");
+  const worker = useRef<Worker | null>(null);
+  const messages = useChatStore((state) => state.messages);
+  const addUserMessage = useChatStore((state) => state.addUserMessage);
+  const appendToken = useChatStore((state) => state.appendToken);
+
+  useEffect(() => {
+    worker.current = new Worker(
+      new URL("../lib/agent.worker.ts", import.meta.url),
+    );
+    worker.current.onmessage = (event: MessageEvent<WorkerEvent>) => {
+      if (event.data.kind === "token") appendToken(event.data.text);
+    };
+    return () => worker.current?.terminate();
+  }, [appendToken]);
+
+  const submit = () => {
+    const content = draft.trim();
+    if (!content) return;
+    addUserMessage(content);
+    worker.current?.postMessage({ type: "send", content });
+    setDraft("");
+  };
 
   return (
     <main className="grid h-svh place-items-center">
@@ -38,30 +53,36 @@ export default function Home() {
             >
               <div
                 className={cn(
-                  "border p-3 text-sm leading-6",
+                  "whitespace-pre-wrap border p-3 text-sm leading-6",
                   message.role === "user"
                     ? "bg-black text-white"
                     : "bg-muted/40",
                 )}
               >
-                {message.text}
+                {message.text || "…"}
               </div>
             </div>
           ))}
         </CardContent>
 
-        <CardFooter className="">
+        <CardFooter>
           <Textarea
             className="h-12 min-h-12 resize-none"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey)
+              if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
+                submit();
+              }
             }}
-            placeholder="Message the agent..."
             value={draft}
           />
-          <Button className="h-12 w-12" disabled={!draft.trim()} size="icon">
+          <Button
+            className="h-12 w-12"
+            disabled={!draft.trim()}
+            onClick={submit}
+            size="icon"
+          >
             <Send />
           </Button>
         </CardFooter>
