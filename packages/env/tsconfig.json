@@ -1,0 +1,3 @@
+{
+  "extends": "@alchemist-ai/config/tsconfig.base.json"
+}
