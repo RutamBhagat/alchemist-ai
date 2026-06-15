@@ -1,14 +1,12 @@
 import { serverMessageSchema } from "./protocol";
+import type { WorkerEvent } from "./worker-events";
 
 type UiToWorker = { type: "send"; content: string };
-type WorkerToUi =
-  | { kind: "token"; text: string }
-  | { kind: "context"; context_id: string; data: Record<string, unknown> };
 
 let socket: WebSocket | undefined;
 let queued: string | undefined;
 
-const post = (message: WorkerToUi) => self.postMessage(message);
+const post = (message: WorkerEvent) => self.postMessage(message);
 
 const sendUserMessage = (content: string) => {
   if (socket?.readyState === WebSocket.OPEN) {
@@ -36,6 +34,22 @@ const sendUserMessage = (content: string) => {
           kind: "context",
           context_id: result.data.context_id,
           data: result.data.data,
+        });
+        break;
+      case "TOOL_CALL":
+        socket?.send(JSON.stringify({ type: "TOOL_ACK", call_id: result.data.call_id }));
+        post({
+          kind: "tool_call",
+          call_id: result.data.call_id,
+          tool_name: result.data.tool_name,
+          args: result.data.args,
+        });
+        break;
+      case "TOOL_RESULT":
+        post({
+          kind: "tool_result",
+          call_id: result.data.call_id,
+          result: result.data.result,
         });
         break;
       case "PING":

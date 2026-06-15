@@ -7,15 +7,12 @@ import {
   CardFooter,
 } from "@alchemist-ai/ui/components/card";
 import { Textarea } from "@alchemist-ai/ui/components/textarea";
-import { cn } from "@alchemist-ai/ui/lib/utils";
+import { ChatMessage } from "@/components/chat-message";
 import { ContextSidebar } from "@/components/context-sidebar";
 import { useChatStore } from "@/lib/chat-store";
+import type { WorkerEvent } from "@/lib/worker-events";
 import { Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-
-type WorkerEvent =
-  | { kind: "token"; text: string }
-  | { kind: "context"; context_id: string; data: Record<string, unknown> };
 
 export default function Home() {
   const [draft, setDraft] = useState("");
@@ -25,6 +22,8 @@ export default function Home() {
   const selectedContextId = useChatStore((state) => state.selectedContextId);
   const addUserMessage = useChatStore((state) => state.addUserMessage);
   const appendToken = useChatStore((state) => state.appendToken);
+  const addToolCall = useChatStore((state) => state.addToolCall);
+  const setToolResult = useChatStore((state) => state.setToolResult);
   const setContext = useChatStore((state) => state.setContext);
   const selectContext = useChatStore((state) => state.selectContext);
 
@@ -43,10 +42,21 @@ export default function Home() {
             data: event.data.data,
           });
           break;
+        case "tool_call":
+          addToolCall({
+            id: event.data.call_id,
+            tool_name: event.data.tool_name,
+            args: event.data.args,
+            result: event.data.result,
+          });
+          break;
+        case "tool_result":
+          setToolResult(event.data.call_id, event.data.result);
+          break;
       }
     };
     return () => worker.current?.terminate();
-  }, [appendToken, setContext]);
+  }, [addToolCall, appendToken, setContext, setToolResult]);
 
   const submit = () => {
     const content = draft.trim();
@@ -63,24 +73,7 @@ export default function Home() {
         <Card className="flex h-full w-full flex-col rounded-none border-0">
           <CardContent className="min-h-0 flex-1 space-y-3 overflow-y-auto py-4">
             {messages.map((message, index) => (
-              <div
-                className={cn(
-                  "w-fit max-w-[80%]",
-                  message.role === "user" ? "ml-auto" : "mr-auto",
-                )}
-                key={index}
-              >
-                <div
-                  className={cn(
-                    "whitespace-pre-wrap border p-3 text-sm leading-6",
-                    message.role === "user"
-                      ? "bg-black text-white"
-                      : "bg-muted/40",
-                  )}
-                >
-                  {message.text || "…"}
-                </div>
-              </div>
+              <ChatMessage key={index} message={message} />
             ))}
           </CardContent>
 
