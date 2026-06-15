@@ -26,6 +26,7 @@ import {
   Radio,
   Wrench,
 } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type TraceEvent = Extract<WorkerEvent, { kind: "trace" }>;
@@ -156,7 +157,7 @@ function Row({
   onSelect: (target: string) => void;
   row: TraceRow;
   selected: boolean;
-  setRef: (node: HTMLDivElement | null) => void;
+  setRef?: (node: HTMLDivElement | null) => void;
   target?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -296,6 +297,16 @@ export function TraceSidebar({
       rowSearchText(row).includes(query.trim().toLowerCase())
     );
   });
+  const rowVirtualizer = useVirtualizer({
+    count: visibleRows.length,
+    estimateSize: () => 76,
+    getItemKey: (index) => {
+      const row = visibleRows[index];
+      return row ? `${row.kind}-${rowId(row)}` : index;
+    },
+    getScrollElement: () => list.current,
+    overscan: 8,
+  });
 
   useEffect(() => {
     if (!list.current) return;
@@ -339,25 +350,39 @@ export function TraceSidebar({
         />
       </SidebarHeader>
       <SidebarContent ref={list}>
-        <SidebarGroupContent className="space-y-1 p-2">
-          {visibleRows.map((row) => {
-            const id = rowId(row);
-            const callId = rowCallId(row);
-            const target = targets.get(id);
-            return (
-              <Row
-                key={`${row.kind}-${id}`}
-                onSelect={onSelectTarget}
-                row={row}
-                selected={target === selectedTarget}
-                setRef={(node) => {
-                  if (target) rowRefs.current[target] = node;
-                  if (callId) rowRefs.current[`call:${callId}`] = node;
-                }}
-                target={target}
-              />
-            );
-          })}
+        <SidebarGroupContent className="p-2">
+          <div
+            className="relative"
+            style={{ height: rowVirtualizer.getTotalSize() }}
+          >
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const row = visibleRows[virtualRow.index];
+              if (!row) return null;
+              const id = rowId(row);
+              const callId = rowCallId(row);
+              const target = targets.get(id);
+              return (
+                <div
+                  className="absolute left-0 top-0 w-full pb-1"
+                  data-index={virtualRow.index}
+                  key={virtualRow.key}
+                  ref={(node) => {
+                    rowVirtualizer.measureElement(node);
+                    if (target) rowRefs.current[target] = node;
+                    if (callId) rowRefs.current[`call:${callId}`] = node;
+                  }}
+                  style={{ transform: `translateY(${virtualRow.start}px)` }}
+                >
+                  <Row
+                    onSelect={onSelectTarget}
+                    row={row}
+                    selected={target === selectedTarget}
+                    target={target}
+                  />
+                </div>
+              );
+            })}
+          </div>
         </SidebarGroupContent>
       </SidebarContent>
       <SidebarRail />
