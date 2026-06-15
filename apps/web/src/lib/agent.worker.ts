@@ -15,6 +15,7 @@ let lastAppliedSeq = 0;
 let streamEndSeq: number | null = null;
 let turnActive = false;
 const ackedToolCalls = new Set<string>();
+const answeredPingSeqs = new Set<number>();
 const sequenceGate = createSequenceGate();
 
 const LATENCY_SPIKE_AFTER_MS = 2000;
@@ -175,7 +176,8 @@ const connect = (resume: boolean) => {
 
     // Heartbeats are liveness checks, so PING must be answered immediately.
     // If we wait for seq-order processing/replay buffering, an out-of-order PING can sit behind missing messages long enough for the server to drop us.
-    if (message.type === "PING") {
+    if (message.type === "PING" && !answeredPingSeqs.has(message.seq)) {
+      answeredPingSeqs.add(message.seq);
       currentSocket.send(JSON.stringify({ type: "PONG", echo: message.challenge }));
     }
     if (message.type === "TOOL_CALL" && !ackedToolCalls.has(message.call_id)) {
@@ -187,8 +189,12 @@ const connect = (resume: boolean) => {
 
     for (const orderedMessage of sequenceGate.accept(message)) {
       applyMessage(orderedMessage);
-      lastAppliedSeq = orderedMessage.seq;
-      if (orderedMessage.type !== "STREAM_END") scheduleResume();
+      if (orderedMessage.type !== "PING") {
+        lastAppliedSeq = orderedMessage.seq;
+      }
+      if (orderedMessage.type !== "PING" && orderedMessage.type !== "STREAM_END") {
+        scheduleResume();
+      }
     }
   };
 };
@@ -202,6 +208,7 @@ const sendUserMessage = (content: string) => {
   clearReconnectTimer();
   sequenceGate.startTurn();
   ackedToolCalls.clear();
+  answeredPingSeqs.clear();
   lastAppliedSeq = 0;
   streamEndSeq = null;
   turnActive = true;
