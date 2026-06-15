@@ -1,6 +1,6 @@
 "use client";
 
-import { Sidebar, SidebarContent, SidebarGroupContent, SidebarRail } from "@alchemist-ai/ui/components/sidebar";
+import { Sidebar, SidebarContent, SidebarGroupContent, SidebarHeader, SidebarRail } from "@alchemist-ai/ui/components/sidebar";
 import type { WorkerEvent } from "@/lib/worker-events";
 import { Activity, Check, ChevronsRight, Radio, Wrench } from "lucide-react";
 import { useEffect, useRef } from "react";
@@ -84,6 +84,11 @@ export function TraceSidebar({ events }: { events: TraceEvent[] }) {
 
   return (
     <Sidebar collapsible="offcanvas" side="left">
+      <SidebarHeader className="border-b px-3 py-3">
+        <div className="flex justify-end">
+          <div className="text-sm font-semibold">Trace</div>
+        </div>
+      </SidebarHeader>
       <SidebarContent ref={list}>
         <SidebarGroupContent className="space-y-1 p-2">
           {rows(events).map((row) => {

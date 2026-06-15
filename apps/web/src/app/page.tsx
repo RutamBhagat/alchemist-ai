@@ -98,7 +98,7 @@ export default function Home() {
       <SidebarInset>
         <main className="grid h-svh grid-cols-2 overflow-hidden">
           <ConnectionPill status={connectionStatus} />
-          <SidebarTrigger className="fixed left-4 top-4 z-50" />
+          <SidebarTrigger className="fixed left-2 top-2 z-50" />
           <section className="min-h-0 min-w-0 overflow-hidden">
             <Card className="flex h-full w-full flex-col rounded-none border-0">
               <CardContent
