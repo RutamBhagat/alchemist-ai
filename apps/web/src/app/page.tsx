@@ -17,8 +17,10 @@ import { useEffect, useRef, useState } from "react";
 
 export default function Home() {
   const [draft, setDraft] = useState("");
+  const [autoScroll] = useState(process.env.NODE_ENV === "development");
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("idle");
+  const messageList = useRef<HTMLDivElement | null>(null);
   const worker = useRef<Worker | null>(null);
   const messages = useChatStore((state) => state.messages);
   const contexts = useChatStore((state) => state.contexts);
@@ -64,6 +66,13 @@ export default function Home() {
     return () => worker.current?.terminate();
   }, [addToolCall, appendToken, setContext, setToolResult]);
 
+  useEffect(() => {
+    if (!autoScroll) return;
+    const list = messageList.current;
+    if (!list) return;
+    list.scrollTop = list.scrollHeight;
+  }, [autoScroll, messages]);
+
   const submit = () => {
     const content = draft.trim();
     if (!content) return;
@@ -78,13 +87,16 @@ export default function Home() {
       <section></section>
       <section className="min-h-0 min-w-0 overflow-hidden">
         <Card className="flex h-full w-full flex-col rounded-none border-0">
-          <CardContent className="min-h-0 flex-1 space-y-3 overflow-y-auto py-4">
+          <CardContent
+            className="min-h-0 flex-1 space-y-3 overflow-y-auto py-4"
+            ref={messageList}
+          >
             {messages.map((message, index) => (
               <ChatMessage key={index} message={message} />
             ))}
           </CardContent>
 
-          <CardFooter className="shrink-0">
+          <CardFooter className="shrink-0 gap-3">
             <Textarea
               className="h-12 min-h-12 resize-none"
               onChange={(event) => setDraft(event.target.value)}

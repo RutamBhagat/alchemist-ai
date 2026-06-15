@@ -10,8 +10,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
   return (
     <div
       className={cn(
-        "w-fit max-w-[80%]",
-        message.role === "user" ? "ml-auto" : "mr-auto",
+        message.role === "user" ? "ml-auto w-fit max-w-[80%]" : "w-full",
       )}
     >
       {message.role === "user" ? (
