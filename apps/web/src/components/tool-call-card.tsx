@@ -2,12 +2,21 @@ import JsonView from "@uiw/react-json-view";
 import type { ToolCall } from "@/lib/chat-store";
 
 type ToolCallCardProps = {
+  onSelect: () => void;
   tool: ToolCall;
 };
 
-export function ToolCallCard({ tool }: ToolCallCardProps) {
+export function ToolCallCard({ onSelect, tool }: ToolCallCardProps) {
   return (
-    <div className="border bg-blue-50 p-3 text-xs">
+    <div
+      className="cursor-pointer border bg-blue-50 p-3 text-xs"
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") onSelect();
+      }}
+      role="button"
+      tabIndex={0}
+    >
       <div className="mb-2 font-semibold">{tool.tool_name}</div>
       <div className="rounded border bg-background p-2">
         <JsonView

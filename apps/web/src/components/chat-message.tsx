@@ -4,9 +4,10 @@ import { ToolCallCard } from "./tool-call-card";
 
 type ChatMessageProps = {
   message: Message;
+  onSelectTool: (callId: string) => void;
 };
 
-export function ChatMessage({ message }: ChatMessageProps) {
+export function ChatMessage({ message, onSelectTool }: ChatMessageProps) {
   return (
     <div
       className={cn(
@@ -29,7 +30,11 @@ export function ChatMessage({ message }: ChatMessageProps) {
                   {part.text}
                 </div>
               ) : (
-                <ToolCallCard key={part.tool.id} tool={part.tool} />
+                <ToolCallCard
+                  key={part.tool.id}
+                  onSelect={() => onSelectTool(part.tool.id)}
+                  tool={part.tool}
+                />
               ),
             )
           ) : (

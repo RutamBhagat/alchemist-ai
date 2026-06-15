@@ -13,9 +13,14 @@ import { ContextSidebar } from "@/components/context-sidebar";
 import { TraceSidebar } from "@/components/trace-sidebar";
 import { useChatStore } from "@/lib/chat-store";
 import type { ConnectionStatus, WorkerEvent } from "@/lib/worker-events";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@alchemist-ai/ui/components/sidebar";
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@alchemist-ai/ui/components/sidebar";
 import { Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
+import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 
 type TraceEvent = Extract<WorkerEvent, { kind: "trace" }>;
@@ -26,6 +31,9 @@ export default function Home() {
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("idle");
   const [traceEvents, setTraceEvents] = useState<TraceEvent[]>([]);
+  const [selectedTraceCallId, setSelectedTraceCallId] = useState<string | null>(
+    null,
+  );
   const [awaitingResponse, setAwaitingResponse] = useState(false);
   const messageList = useRef<HTMLDivElement | null>(null);
   const worker = useRef<Worker | null>(null);
@@ -52,7 +60,10 @@ export default function Home() {
           {
             const traceEvent = event.data;
             setTraceEvents((events) => [...events, traceEvent]);
-            if (traceEvent.type === "STREAM_END" || traceEvent.type === "ERROR") {
+            if (
+              traceEvent.type === "STREAM_END" ||
+              traceEvent.type === "ERROR"
+            ) {
               setAwaitingResponse(false);
             }
           }
@@ -108,8 +119,11 @@ export default function Home() {
   };
 
   return (
-    <SidebarProvider defaultOpen>
-      <TraceSidebar events={traceEvents} />
+    <SidebarProvider
+      defaultOpen
+      style={{ "--sidebar-width": "30rem" } as CSSProperties}
+    >
+      <TraceSidebar events={traceEvents} selectedCallId={selectedTraceCallId} />
       <SidebarInset>
         <main className="grid h-svh grid-cols-2 overflow-hidden">
           <ConnectionPill status={connectionStatus} />
@@ -121,7 +135,11 @@ export default function Home() {
                 ref={messageList}
               >
                 {messages.map((message, index) => (
-                  <ChatMessage key={index} message={message} />
+                  <ChatMessage
+                    key={index}
+                    message={message}
+                    onSelectTool={setSelectedTraceCallId}
+                  />
                 ))}
               </CardContent>
 
@@ -143,7 +161,11 @@ export default function Home() {
                   onClick={submit}
                   size="icon"
                 >
-                  {serverResponding ? <Loader2 className="animate-spin" /> : <Send />}
+                  {serverResponding ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <Send />
+                  )}
                 </Button>
               </CardFooter>
             </Card>
