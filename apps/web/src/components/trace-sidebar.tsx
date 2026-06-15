@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@alchemist-ai/ui/components/button";
 import { Input } from "@alchemist-ai/ui/components/input";
 import {
   Select,
@@ -17,7 +18,14 @@ import {
 } from "@alchemist-ai/ui/components/sidebar";
 import { cn } from "@alchemist-ai/ui/lib/utils";
 import type { WorkerEvent } from "@/lib/worker-events";
-import { Activity, Check, ChevronsRight, Radio, Wrench } from "lucide-react";
+import {
+  Activity,
+  Check,
+  ChevronsRight,
+  LocateFixed,
+  Radio,
+  Wrench,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type TraceEvent = Extract<WorkerEvent, { kind: "trace" }>;
@@ -130,14 +138,26 @@ function rowCallId(row: TraceRow) {
   return row.kind === "tool_group" ? row.call.call_id : rowEvent(row).call_id;
 }
 
+function rowId(row: TraceRow) {
+  return row.kind === "token_group"
+    ? row.items[0].id
+    : row.kind === "tool_group"
+      ? row.call.id
+      : row.id;
+}
+
 function Row({
+  onSelect,
   row,
   selected,
   setRef,
+  target,
 }: {
+  onSelect: (target: string) => void;
   row: TraceRow;
   selected: boolean;
   setRef: (node: HTMLDivElement | null) => void;
+  target?: string;
 }) {
   const [open, setOpen] = useState(false);
   const event = rowEvent(row);
@@ -157,19 +177,36 @@ function Row({
           "border-emerald-500 bg-emerald-50 text-emerald-950",
       )}
     >
-      <button
-        className="flex w-full items-center gap-2 text-left"
-        onClick={() => row.kind === "token_group" && setOpen((value) => !value)}
-        type="button"
-      >
+      <div className="flex w-full items-center gap-2 text-left">
         <Icon className="size-3 shrink-0" />
-        <span className="min-w-0 flex-1 truncate font-medium">
-          {rowText(row)}
-        </span>
+        {row.kind === "token_group" ? (
+          <button
+            className="min-w-0 flex-1 truncate text-left font-medium"
+            onClick={() => setOpen((value) => !value)}
+            type="button"
+          >
+            {rowText(row)}
+          </button>
+        ) : (
+          <span className="min-w-0 flex-1 truncate font-medium">
+            {rowText(row)}
+          </span>
+        )}
         <span className="font-mono text-muted-foreground">
           {time(event.at)}
         </span>
-      </button>
+        {target && (
+          <Button
+            aria-label="Show in chat"
+            onClick={() => onSelect(target)}
+            size="icon-xs"
+            type="button"
+            variant="ghost"
+          >
+            <LocateFixed className="size-3" />
+          </Button>
+        )}
+      </div>
       <div className="mt-1 truncate pl-5 font-mono text-muted-foreground">
         {event.seq ? `#${event.seq} ` : ""}
         {event.call_id ? `${event.call_id} ` : ""}
@@ -220,10 +257,12 @@ function Row({
 
 export function TraceSidebar({
   events,
-  selectedCallId,
+  onSelectTarget,
+  selectedTarget,
 }: {
   events: TraceEvent[];
-  selectedCallId: string | null;
+  onSelectTarget: (target: string) => void;
+  selectedTarget: string | null;
 }) {
   const list = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -233,7 +272,19 @@ export function TraceSidebar({
     () => Array.from(new Set(events.map((event) => event.type))).sort(),
     [events],
   );
-  const visibleRows = rows(events).filter((row) => {
+  const allRows = useMemo(() => rows(events), [events]);
+  const targets = useMemo(() => {
+    return new Map(
+      allRows.flatMap((row) => {
+        const event = rowEvent(row);
+        const callId = rowCallId(row);
+        if (callId) return [[rowId(row), `call:${callId}`]];
+        if (event.target) return [[rowId(row), event.target]];
+        return [];
+      }),
+    );
+  }, [allRows]);
+  const visibleRows = allRows.filter((row) => {
     const items =
       row.kind === "token_group"
         ? row.items
@@ -252,12 +303,12 @@ export function TraceSidebar({
   }, [events]);
 
   useEffect(() => {
-    if (!selectedCallId) return;
-    rowRefs.current[selectedCallId]?.scrollIntoView({
+    if (!selectedTarget) return;
+    rowRefs.current[selectedTarget]?.scrollIntoView({
       block: "center",
       behavior: "smooth",
     });
-  }, [selectedCallId]);
+  }, [selectedTarget]);
 
   return (
     <Sidebar collapsible="offcanvas" side="left">
@@ -290,21 +341,20 @@ export function TraceSidebar({
       <SidebarContent ref={list}>
         <SidebarGroupContent className="space-y-1 p-2">
           {visibleRows.map((row) => {
-            const id =
-              row.kind === "token_group"
-                ? row.items[0].id
-                : row.kind === "tool_group"
-                  ? row.call.id
-                  : row.id;
+            const id = rowId(row);
             const callId = rowCallId(row);
+            const target = targets.get(id);
             return (
               <Row
                 key={`${row.kind}-${id}`}
+                onSelect={onSelectTarget}
                 row={row}
-                selected={callId === selectedCallId}
+                selected={target === selectedTarget}
                 setRef={(node) => {
-                  if (callId) rowRefs.current[callId] = node;
+                  if (target) rowRefs.current[target] = node;
+                  if (callId) rowRefs.current[`call:${callId}`] = node;
                 }}
+                target={target}
               />
             );
           })}

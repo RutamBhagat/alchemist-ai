@@ -15,7 +15,7 @@ export type ToolCall = {
 };
 
 export type MessagePart =
-  | { kind: "text"; text: string }
+  | { kind: "text"; target: string; text: string }
   | { kind: "tool_call"; tool: ToolCall };
 
 export type Message =
@@ -27,7 +27,7 @@ type ChatState = {
   contexts: Record<string, ContextSlot>;
   selectedContextId: string | null;
   addUserMessage: (text: string) => void;
-  appendToken: (text: string) => void;
+  appendToken: (text: string, target: string) => void;
   addToolCall: (tool: ToolCall) => void;
   setToolResult: (callId: string, result: Record<string, unknown>) => void;
   setContext: (context: ContextSnapshot) => void;
@@ -42,7 +42,7 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) => ({
       messages: [...state.messages, { role: "user", text }, { role: "agent", parts: [] }],
     })),
-  appendToken: (text) =>
+  appendToken: (text, target) =>
     set((state) => {
       const messages = [...state.messages];
       const last = messages.at(-1);
@@ -51,10 +51,10 @@ export const useChatStore = create<ChatState>((set) => ({
       }
       const parts = [...last.parts];
       const previous = parts.at(-1);
-      if (previous?.kind === "text") {
-        parts[parts.length - 1] = { kind: "text", text: previous.text + text };
+      if (previous?.kind === "text" && previous.target === target) {
+        parts[parts.length - 1] = { ...previous, text: previous.text + text };
       } else {
-        parts.push({ kind: "text", text });
+        parts.push({ kind: "text", target, text });
       }
       messages[messages.length - 1] = { ...last, parts };
       return { messages };

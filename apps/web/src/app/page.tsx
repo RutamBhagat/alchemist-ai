@@ -31,7 +31,7 @@ export default function Home() {
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("idle");
   const [traceEvents, setTraceEvents] = useState<TraceEvent[]>([]);
-  const [selectedTraceCallId, setSelectedTraceCallId] = useState<string | null>(
+  const [selectedTraceTarget, setSelectedTraceTarget] = useState<string | null>(
     null,
   );
   const [awaitingResponse, setAwaitingResponse] = useState(false);
@@ -78,7 +78,7 @@ export default function Home() {
           toast.error(event.data.message);
           break;
         case "token":
-          appendToken(event.data.text);
+          appendToken(event.data.text, event.data.target);
           break;
         case "context":
           setContext({
@@ -109,6 +109,24 @@ export default function Home() {
     list.scrollTop = list.scrollHeight;
   }, [autoScroll, messages]);
 
+  useEffect(() => {
+    if (!selectedTraceTarget) return;
+    scrollToChatTarget(selectedTraceTarget);
+  }, [selectedTraceTarget]);
+
+  const selectTraceTarget = (target: string) => {
+    setSelectedTraceTarget(target);
+    requestAnimationFrame(() => scrollToChatTarget(target));
+  };
+
+  const scrollToChatTarget = (target: string) => {
+    const element = Array.from(
+      messageList.current?.querySelectorAll<HTMLElement>("[data-chat-target]") ??
+        [],
+    ).find((node) => node.dataset.chatTarget === target);
+    element?.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
+
   const submit = () => {
     const content = draft.trim();
     if (!content || serverResponding) return;
@@ -117,13 +135,18 @@ export default function Home() {
     worker.current?.postMessage({ type: "send", content });
     setDraft("");
   };
+  let userIndex = 0;
 
   return (
     <SidebarProvider
       defaultOpen
       style={{ "--sidebar-width": "30rem" } as CSSProperties}
     >
-      <TraceSidebar events={traceEvents} selectedCallId={selectedTraceCallId} />
+      <TraceSidebar
+        events={traceEvents}
+        onSelectTarget={selectTraceTarget}
+        selectedTarget={selectedTraceTarget}
+      />
       <SidebarInset>
         <main className="grid h-svh grid-cols-2 overflow-hidden">
           <ConnectionPill status={connectionStatus} />
@@ -134,13 +157,21 @@ export default function Home() {
                 className="min-h-0 flex-1 space-y-3 overflow-y-auto py-4"
                 ref={messageList}
               >
-                {messages.map((message, index) => (
-                  <ChatMessage
-                    key={index}
-                    message={message}
-                    onSelectTool={setSelectedTraceCallId}
-                  />
-                ))}
+                {messages.map((message, index) => {
+                  const userTarget =
+                    message.role === "user" ? `user:${++userIndex}` : null;
+                  return (
+                    <ChatMessage
+                      key={index}
+                      message={message}
+                      onSelectTool={(callId) =>
+                        selectTraceTarget(`call:${callId}`)
+                      }
+                      selectedTarget={selectedTraceTarget}
+                      userTarget={userTarget}
+                    />
+                  );
+                })}
               </CardContent>
 
               <CardFooter className="shrink-0 gap-3">

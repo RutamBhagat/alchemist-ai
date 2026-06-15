@@ -1,16 +1,28 @@
 import JsonView from "@uiw/react-json-view";
+import { cn } from "@alchemist-ai/ui/lib/utils";
 import type { ToolCall } from "@/lib/chat-store";
 
 type ToolCallCardProps = {
   onSelect: () => void;
+  selected: boolean;
+  target: string;
   tool: ToolCall;
 };
 
-export function ToolCallCard({ onSelect, tool }: ToolCallCardProps) {
+export function ToolCallCard({
+  onSelect,
+  selected,
+  target,
+  tool,
+}: ToolCallCardProps) {
   return (
     <div
-      className="cursor-pointer border bg-blue-50 p-3 text-xs"
+      className={cn(
+        "cursor-pointer border bg-blue-50 p-3 text-xs",
+        selected && "border-blue-500 ring-2 ring-blue-200",
+      )}
       onClick={onSelect}
+      data-chat-target={target}
       onKeyDown={(event) => {
         if (event.key === "Enter") onSelect();
       }}

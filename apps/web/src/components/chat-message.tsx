@@ -5,9 +5,16 @@ import { ToolCallCard } from "./tool-call-card";
 type ChatMessageProps = {
   message: Message;
   onSelectTool: (callId: string) => void;
+  selectedTarget: string | null;
+  userTarget: string | null;
 };
 
-export function ChatMessage({ message, onSelectTool }: ChatMessageProps) {
+export function ChatMessage({
+  message,
+  onSelectTool,
+  selectedTarget,
+  userTarget,
+}: ChatMessageProps) {
   return (
     <div
       className={cn(
@@ -15,28 +22,43 @@ export function ChatMessage({ message, onSelectTool }: ChatMessageProps) {
       )}
     >
       {message.role === "user" ? (
-        <div className="whitespace-pre-wrap border bg-black p-3 text-sm leading-6 text-white">
+        <div
+          className={cn(
+            "whitespace-pre-wrap border bg-black p-3 text-sm leading-6 text-white",
+            selectedTarget === userTarget && "border-blue-500 ring-2 ring-blue-200",
+          )}
+          data-chat-target={userTarget ?? undefined}
+        >
           {message.text}
         </div>
       ) : (
         <div className="space-y-2">
           {message.parts.length ? (
-            message.parts.map((part, index) =>
-              part.kind === "text" ? (
-                <div
-                  className="whitespace-pre-wrap border bg-muted/40 p-3 text-sm leading-6"
-                  key={index}
-                >
-                  {part.text}
-                </div>
-              ) : (
+            message.parts.map((part, index) => {
+              if (part.kind === "text") {
+                return (
+                  <div
+                    className={cn(
+                      "whitespace-pre-wrap border bg-muted/40 p-3 text-sm leading-6",
+                      selectedTarget === part.target && "border-blue-500 bg-blue-50",
+                    )}
+                    data-chat-target={part.target}
+                    key={index}
+                  >
+                    {part.text}
+                  </div>
+                );
+              }
+              return (
                 <ToolCallCard
                   key={part.tool.id}
                   onSelect={() => onSelectTool(part.tool.id)}
+                  selected={selectedTarget === `call:${part.tool.id}`}
+                  target={`call:${part.tool.id}`}
                   tool={part.tool}
                 />
-              ),
-            )
+              );
+            })
           ) : (
             <div className="border bg-muted/40 p-3 text-sm leading-6">…</div>
           )}

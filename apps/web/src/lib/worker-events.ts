@@ -16,7 +16,7 @@ export type ConnectionStatus =
   | "disconnected";
 
 export type WorkerEvent =
-  | ScriptTokenEvent
+  | (ScriptTokenEvent & { target: string })
   | ScriptContextEvent
   | { kind: "notification"; type: "error"; message: string }
   | { kind: "connection"; status: ConnectionStatus }
@@ -29,6 +29,7 @@ export type WorkerEvent =
       seq?: number;
       stream_id?: string;
       call_id?: string;
+      target?: string;
       text?: string;
       label: string;
     }

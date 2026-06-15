@@ -17,6 +17,10 @@ type WorkerState = {
   lastAppliedSeq: number;
   lastUserMessage?: string;
   renderedText: string;
+  textTarget: string | null;
+  textTargetId: number;
+  userTarget: string | null;
+  userTargetId: number;
   restartSkipText: string;
   restartSuppressToolEvents: boolean;
   streamEndSeq: number | null;
@@ -30,6 +34,10 @@ const state: WorkerState = {
   reconnectDelayMs: 500,
   lastAppliedSeq: 0,
   renderedText: "",
+  textTarget: null,
+  textTargetId: 0,
+  userTarget: null,
+  userTargetId: 0,
   restartSkipText: "",
   restartSuppressToolEvents: false,
   streamEndSeq: null,
@@ -97,7 +105,7 @@ function parseServerMessage(data: string): ServerMessage | null {
 
 function sendTurn(content: string) {
   state.socket?.send(JSON.stringify({ type: "USER_MESSAGE", content }));
-  traceOut("USER_MESSAGE", content);
+  traceOut("USER_MESSAGE", content, undefined, state.userTarget ?? undefined);
   scheduleResume();
 }
 
@@ -134,17 +142,23 @@ function scheduleRestartAfterResumeStall() {
   }, RESTART_AFTER_RESUME_STALL_MS);
 }
 
+function textTarget() {
+  state.textTarget ??= `text:${++state.textTargetId}`;
+  return state.textTarget;
+}
+
 function applyToken(text: string) {
   if (!state.restartSkipText) {
     state.restartSuppressToolEvents = false;
     state.renderedText += text;
-    self.postMessage({ kind: "token", text });
-    return;
+    const target = textTarget();
+    self.postMessage({ kind: "token", text, target });
+    return target;
   }
 
   if (state.restartSkipText.startsWith(text)) {
     state.restartSkipText = state.restartSkipText.slice(text.length);
-    return;
+    return null;
   }
 
   if (text.startsWith(state.restartSkipText)) {
@@ -153,23 +167,26 @@ function applyToken(text: string) {
     state.renderedText += newText;
     if (newText) {
       state.restartSuppressToolEvents = false;
-      self.postMessage({ kind: "token", text: newText });
+      const target = textTarget();
+      self.postMessage({ kind: "token", text: newText, target });
+      return target;
     }
-    return;
+    return null;
   }
 
   state.restartSkipText = "";
   state.restartSuppressToolEvents = false;
   state.renderedText += text;
-  self.postMessage({ kind: "token", text });
+  const target = textTarget();
+  self.postMessage({ kind: "token", text, target });
+  return target;
 }
 
 function applyMessage(message: ServerMessage) {
   switch (message.type) {
     case "TOKEN":
       markActive();
-      applyToken(message.text);
-      break;
+      return applyToken(message.text);
     case "CONTEXT_SNAPSHOT":
       markActive();
       self.postMessage({
@@ -189,6 +206,7 @@ function applyMessage(message: ServerMessage) {
         tool_name: message.tool_name,
         args: message.args,
       });
+      state.textTarget = null;
       break;
     case "TOOL_RESULT":
       markActive();
@@ -316,10 +334,13 @@ function connect(resume: boolean) {
     }
 
     for (const orderedMessage of state.sequenceGate.accept(message)) {
-      if (orderedMessage.type !== "PING") {
+      if (orderedMessage.type !== "PING" && orderedMessage.type !== "TOKEN") {
         trace(orderedMessage, receivedAt);
       }
-      applyMessage(orderedMessage);
+      const target = applyMessage(orderedMessage);
+      if (orderedMessage.type === "TOKEN" && target) {
+        trace(orderedMessage, receivedAt, orderedMessage.text, target);
+      }
       if (orderedMessage.type !== "PING") {
         state.lastAppliedSeq = orderedMessage.seq;
       }
@@ -354,6 +375,8 @@ function startTurn() {
   state.reconnectDelayMs = 500;
   state.lastAppliedSeq = 0;
   state.renderedText = "";
+  state.textTarget = null;
+  state.userTarget = `user:${++state.userTargetId}`;
   state.restartSkipText = "";
   state.restartSuppressToolEvents = false;
   state.streamEndSeq = null;

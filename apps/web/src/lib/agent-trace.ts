@@ -14,6 +14,7 @@ export function trace(
   message: ServerMessage,
   at: number,
   label = "text" in message ? message.text : message.type,
+  target?: string,
 ) {
   postTrace({
     kind: "trace",
@@ -24,6 +25,7 @@ export function trace(
     seq: message.seq,
     stream_id: "stream_id" in message ? message.stream_id : undefined,
     call_id: "call_id" in message ? message.call_id : undefined,
+    target,
     text: "text" in message ? message.text : undefined,
     label,
   });
@@ -33,6 +35,7 @@ export function traceOut(
   type: OutboundTraceType,
   label: string,
   call_id?: string,
+  target?: string,
 ) {
   postTrace({
     kind: "trace",
@@ -41,6 +44,7 @@ export function traceOut(
     direction: "out",
     type,
     call_id,
+    target,
     label,
   });
 }
