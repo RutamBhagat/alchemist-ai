@@ -203,6 +203,7 @@ const connect = (resume: boolean) => {
 
 const scheduleReconnect = () => {
   clearReconnectTimer();
+  setStatus("reconnecting");
   reconnectTimer = setTimeout(() => connect(queued === undefined), reconnectDelayMs);
   reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_AFTER_MS);
 };
