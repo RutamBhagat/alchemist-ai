@@ -1,7 +1,9 @@
 import { serverMessageSchema } from "./protocol";
 
 type UiToWorker = { type: "send"; content: string };
-type WorkerToUi = { kind: "token"; text: string };
+type WorkerToUi =
+  | { kind: "token"; text: string }
+  | { kind: "context"; context_id: string; data: Record<string, unknown> };
 
 let socket: WebSocket | undefined;
 let queued: string | undefined;
@@ -28,6 +30,13 @@ const sendUserMessage = (content: string) => {
     switch (result.data.type) {
       case "TOKEN":
         post({ kind: "token", text: result.data.text });
+        break;
+      case "CONTEXT_SNAPSHOT":
+        post({
+          kind: "context",
+          context_id: result.data.context_id,
+          data: result.data.data,
+        });
         break;
       case "PING":
         socket?.send(JSON.stringify({ type: "PONG", echo: result.data.challenge }));
