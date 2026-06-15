@@ -1,0 +1,24 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": [
+    "src/index.{ts,tsx,js,jsx}",
+    "src/main.{ts,tsx,js,jsx}"
+  ],
+  "workspaces": {
+    "packages": [
+      "apps/*",
+      "packages/*"
+    ]
+  },
+  "ignorePatterns": [
+    "apps/agent-server/**",
+    "**/lib/**",
+    "**/legacy/**",
+    "**/__generated__/**",
+    "**/generated/**"
+  ],
+  "duplicates": {
+    "minOccurrences": 3
+  },
+  "rules": {}
+}
