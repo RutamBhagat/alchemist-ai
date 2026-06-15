@@ -284,8 +284,9 @@ function connect(resume: boolean) {
     clearTimeout(state.restartTimer);
     if (state.turnActive) {
       scheduleReconnect();
+    } else {
+      self.postMessage({ kind: "connection", status: "disconnected" });
     }
-    self.postMessage({ kind: "connection", status: "disconnected" });
     self.postMessage({
       kind: "notification",
       type: "error",
