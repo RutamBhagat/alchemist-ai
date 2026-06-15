@@ -36,6 +36,8 @@ export default function Home() {
   );
   const [awaitingResponse, setAwaitingResponse] = useState(false);
   const messageList = useRef<HTMLDivElement | null>(null);
+  const pendingTraceEvents = useRef<TraceEvent[]>([]);
+  const traceFlush = useRef<number | null>(null);
   const worker = useRef<Worker | null>(null);
   const messages = useChatStore((state) => state.messages);
   const contexts = useChatStore((state) => state.contexts);
@@ -59,7 +61,15 @@ export default function Home() {
         case "trace":
           {
             const traceEvent = event.data;
-            setTraceEvents((events) => [...events, traceEvent]);
+            pendingTraceEvents.current.push(traceEvent);
+            if (traceFlush.current === null) {
+              traceFlush.current = requestAnimationFrame(() => {
+                traceFlush.current = null;
+                const batch = pendingTraceEvents.current;
+                pendingTraceEvents.current = [];
+                setTraceEvents((events) => [...events, ...batch]);
+              });
+            }
             if (
               traceEvent.type === "STREAM_END" ||
               traceEvent.type === "ERROR"
@@ -99,7 +109,10 @@ export default function Home() {
           break;
       }
     };
-    return () => worker.current?.terminate();
+    return () => {
+      if (traceFlush.current !== null) cancelAnimationFrame(traceFlush.current);
+      worker.current?.terminate();
+    };
   }, [addToolCall, appendToken, setContext, setToolResult]);
 
   useEffect(() => {
