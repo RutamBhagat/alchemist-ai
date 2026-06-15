@@ -228,6 +228,11 @@ function applyMessage(message: ServerMessage) {
       markConnected();
       break;
     case "ERROR":
+      self.postMessage({
+        kind: "notification",
+        type: "error",
+        message: message.message,
+      });
       break;
   }
 }
