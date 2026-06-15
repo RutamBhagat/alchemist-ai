@@ -15,6 +15,7 @@ let reconnectDelayMs = 500;
 let lastAppliedSeq = 0;
 let streamEndSeq: number | null = null;
 let turnActive = false;
+let traceId = 0;
 const ackedToolCalls = new Set<string>();
 const answeredPingSeqs = new Set<number>();
 const sequenceGate = createSequenceGate();
@@ -25,8 +26,40 @@ const RESUME_WHEN_STALLED_MS = 1500;
 const MISSING_STREAM_END_AFTER_MS = 8000;
 
 const post = (message: WorkerEvent) => self.postMessage(message);
-const setStatus = (status: ConnectionStatus) =>
+const trace = (
+  message: ServerMessage,
+  at: number,
+  label = "text" in message ? message.text : message.type,
+) =>
+  post({
+    kind: "trace",
+    id: ++traceId,
+    at,
+    direction: "in",
+    type: message.type,
+    seq: message.seq,
+    stream_id: "stream_id" in message ? message.stream_id : undefined,
+    call_id: "call_id" in message ? message.call_id : undefined,
+    text: "text" in message ? message.text : undefined,
+    label,
+  });
+const traceOut = (
+  type: "PONG" | "TOOL_ACK" | "USER_MESSAGE" | "RESUME",
+  label: string,
+  call_id?: string,
+) =>
+  post({
+    kind: "trace",
+    id: ++traceId,
+    at: performance.now(),
+    direction: "out",
+    type,
+    call_id,
+    label,
+  });
+const setStatus = (status: ConnectionStatus) => {
   post({ kind: "connection", status });
+};
 
 const markActive = () => {
   setStatus("streaming");
@@ -71,11 +104,13 @@ const parseServerMessage = (data: string): ServerMessage | null => {
 
 const sendTurn = (content: string) => {
   socket?.send(JSON.stringify({ type: "USER_MESSAGE", content }));
+  traceOut("USER_MESSAGE", content);
   scheduleResume();
 };
 
 const resumeTurn = () => {
   socket?.send(JSON.stringify({ type: "RESUME", last_seq: lastAppliedSeq }));
+  traceOut("RESUME", `last_seq ${lastAppliedSeq}`);
   scheduleResume();
 };
 
@@ -167,6 +202,7 @@ const connect = (resume: boolean) => {
   };
   currentSocket.onmessage = (event: MessageEvent<string>) => {
     if (socket !== currentSocket) return;
+    const receivedAt = performance.now();
     const message = parseServerMessage(event.data);
     if (!message) return;
 
@@ -180,16 +216,20 @@ const connect = (resume: boolean) => {
     // If we wait for seq-order processing/replay buffering, an out-of-order PING can sit behind missing messages long enough for the server to drop us.
     if (message.type === "PING" && !answeredPingSeqs.has(message.seq)) {
       answeredPingSeqs.add(message.seq);
+      trace(message, receivedAt);
       currentSocket.send(JSON.stringify({ type: "PONG", echo: message.challenge }));
+      traceOut("PONG", `echo ${message.challenge || "(empty)"}`);
     }
     if (message.type === "TOOL_CALL" && !ackedToolCalls.has(message.call_id)) {
       ackedToolCalls.add(message.call_id);
       currentSocket.send(
         JSON.stringify({ type: "TOOL_ACK", call_id: message.call_id }),
       );
+      traceOut("TOOL_ACK", message.call_id, message.call_id);
     }
 
     for (const orderedMessage of sequenceGate.accept(message)) {
+      if (orderedMessage.type !== "PING") trace(orderedMessage, receivedAt);
       applyMessage(orderedMessage);
       if (orderedMessage.type !== "PING") {
         lastAppliedSeq = orderedMessage.seq;

@@ -10,16 +10,21 @@ import { Textarea } from "@alchemist-ai/ui/components/textarea";
 import { ChatMessage } from "@/components/chat-message";
 import { ConnectionPill } from "@/components/connection-pill";
 import { ContextSidebar } from "@/components/context-sidebar";
+import { TraceSidebar } from "@/components/trace-sidebar";
 import { useChatStore } from "@/lib/chat-store";
 import type { ConnectionStatus, WorkerEvent } from "@/lib/worker-events";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@alchemist-ai/ui/components/sidebar";
 import { Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+
+type TraceEvent = Extract<WorkerEvent, { kind: "trace" }>;
 
 export default function Home() {
   const [draft, setDraft] = useState("");
   const [autoScroll] = useState(process.env.NODE_ENV === "development");
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("idle");
+  const [traceEvents, setTraceEvents] = useState<TraceEvent[]>([]);
   const messageList = useRef<HTMLDivElement | null>(null);
   const worker = useRef<Worker | null>(null);
   const messages = useChatStore((state) => state.messages);
@@ -38,6 +43,12 @@ export default function Home() {
     );
     worker.current.onmessage = (event: MessageEvent<WorkerEvent>) => {
       switch (event.data.kind) {
+        case "trace":
+          {
+            const traceEvent = event.data;
+            setTraceEvents((events) => [...events, traceEvent]);
+          }
+          break;
         case "connection":
           setConnectionStatus(event.data.status);
           break;
@@ -82,48 +93,53 @@ export default function Home() {
   };
 
   return (
-    <main className="grid h-svh grid-cols-3 overflow-hidden">
-      <ConnectionPill status={connectionStatus} />
-      <section></section>
-      <section className="min-h-0 min-w-0 overflow-hidden">
-        <Card className="flex h-full w-full flex-col rounded-none border-0">
-          <CardContent
-            className="min-h-0 flex-1 space-y-3 overflow-y-auto py-4"
-            ref={messageList}
-          >
-            {messages.map((message, index) => (
-              <ChatMessage key={index} message={message} />
-            ))}
-          </CardContent>
+    <SidebarProvider defaultOpen>
+      <TraceSidebar events={traceEvents} />
+      <SidebarInset>
+        <main className="grid h-svh grid-cols-2 overflow-hidden">
+          <ConnectionPill status={connectionStatus} />
+          <SidebarTrigger className="fixed left-4 top-4 z-50" />
+          <section className="min-h-0 min-w-0 overflow-hidden">
+            <Card className="flex h-full w-full flex-col rounded-none border-0">
+              <CardContent
+                className="min-h-0 flex-1 space-y-3 overflow-y-auto py-4"
+                ref={messageList}
+              >
+                {messages.map((message, index) => (
+                  <ChatMessage key={index} message={message} />
+                ))}
+              </CardContent>
 
-          <CardFooter className="shrink-0 gap-3">
-            <Textarea
-              className="h-12 min-h-12 resize-none"
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-              value={draft}
-            />
-            <Button
-              className="h-12 w-12"
-              disabled={!draft.trim()}
-              onClick={submit}
-              size="icon"
-            >
-              <Send />
-            </Button>
-          </CardFooter>
-        </Card>
-      </section>
-      <ContextSidebar
-        contexts={contexts}
-        onSelectContext={selectContext}
-        selectedContextId={selectedContextId}
-      />
-    </main>
+              <CardFooter className="shrink-0 gap-3">
+                <Textarea
+                  className="h-12 min-h-12 resize-none"
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      submit();
+                    }
+                  }}
+                  value={draft}
+                />
+                <Button
+                  className="h-12 w-12"
+                  disabled={!draft.trim()}
+                  onClick={submit}
+                  size="icon"
+                >
+                  <Send />
+                </Button>
+              </CardFooter>
+            </Card>
+          </section>
+          <ContextSidebar
+            contexts={contexts}
+            onSelectContext={selectContext}
+            selectedContextId={selectedContextId}
+          />
+        </main>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }
