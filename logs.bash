@@ -1,0 +1,1 @@
+curl -s http://localhost:4747/log | jq '.[] | select(.verdict != "ok")'

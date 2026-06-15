@@ -83,7 +83,7 @@ const applyMessage = (message: ServerMessage) => {
 };
 
 const sendUserMessage = (content: string) => {
-  sequenceGate.startTurn(lastAppliedSeq);
+  sequenceGate.startTurn();
   if (socket?.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "USER_MESSAGE", content }));
     return;
