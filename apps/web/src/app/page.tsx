@@ -121,8 +121,9 @@ export default function Home() {
 
   const scrollToChatTarget = (target: string) => {
     const element = Array.from(
-      messageList.current?.querySelectorAll<HTMLElement>("[data-chat-target]") ??
-        [],
+      messageList.current?.querySelectorAll<HTMLElement>(
+        "[data-chat-target]",
+      ) ?? [],
     ).find((node) => node.dataset.chatTarget === target);
     element?.scrollIntoView({ block: "center", behavior: "smooth" });
   };
@@ -164,6 +165,7 @@ export default function Home() {
                     <ChatMessage
                       key={index}
                       message={message}
+                      onSelectText={selectTraceTarget}
                       onSelectTool={(callId) =>
                         selectTraceTarget(`call:${callId}`)
                       }

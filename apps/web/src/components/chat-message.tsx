@@ -3,6 +3,7 @@ import type { Message } from "@/lib/chat-store";
 import { ToolCallCard } from "./tool-call-card";
 
 type ChatMessageProps = {
+  onSelectText: (target: string) => void;
   message: Message;
   onSelectTool: (callId: string) => void;
   selectedTarget: string | null;
@@ -11,6 +12,7 @@ type ChatMessageProps = {
 
 export function ChatMessage({
   message,
+  onSelectText,
   onSelectTool,
   selectedTarget,
   userTarget,
@@ -24,10 +26,16 @@ export function ChatMessage({
       {message.role === "user" ? (
         <div
           className={cn(
-            "whitespace-pre-wrap border bg-black p-3 text-sm leading-6 text-white",
+            "cursor-pointer whitespace-pre-wrap border bg-black p-3 text-sm leading-6 text-white",
             selectedTarget === userTarget && "border-blue-500 ring-2 ring-blue-200",
           )}
           data-chat-target={userTarget ?? undefined}
+          onClick={() => userTarget && onSelectText(userTarget)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && userTarget) onSelectText(userTarget);
+          }}
+          role="button"
+          tabIndex={0}
         >
           {message.text}
         </div>
@@ -39,11 +47,17 @@ export function ChatMessage({
                 return (
                   <div
                     className={cn(
-                      "whitespace-pre-wrap border bg-muted/40 p-3 text-sm leading-6",
+                      "cursor-pointer whitespace-pre-wrap border bg-muted/40 p-3 text-sm leading-6",
                       selectedTarget === part.target && "border-blue-500 bg-blue-50",
                     )}
                     data-chat-target={part.target}
                     key={index}
+                    onClick={() => onSelectText(part.target)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") onSelectText(part.target);
+                    }}
+                    role="button"
+                    tabIndex={0}
                   >
                     {part.text}
                   </div>
