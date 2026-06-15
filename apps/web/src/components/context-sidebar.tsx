@@ -17,9 +17,13 @@ export function ContextSidebar({
   onSelectContext,
 }: ContextSidebarProps) {
   const [height, setHeight] = useState(0);
+  const [snapshotIndex, setSnapshotIndex] = useState(0);
   const viewerRef = useRef<HTMLDivElement>(null);
   const contextIds = Object.keys(contexts);
   const slot = selectedContextId ? contexts[selectedContextId] : undefined;
+  const snapshots = slot?.snapshots ?? [];
+  const current = snapshots[snapshotIndex];
+  const previous = snapshots[snapshotIndex - 1] ?? null;
 
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -30,6 +34,10 @@ export function ContextSidebar({
     observer.observe(viewer);
     return () => observer.disconnect();
   }, [contextIds.length]);
+
+  useEffect(() => {
+    setSnapshotIndex(Math.max(0, snapshots.length - 1));
+  }, [selectedContextId, snapshots.length]);
 
   return (
     <aside className="h-full min-w-0 overflow-hidden border-l p-4">
@@ -51,24 +59,45 @@ export function ContextSidebar({
               </button>
             ))}
           </div>
+          {snapshots.length > 1 ? (
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <button
+                className="border px-2 py-1 disabled:opacity-50"
+                disabled={snapshotIndex === 0}
+                onClick={() => setSnapshotIndex((index) => index - 1)}
+              >
+                Previous
+              </button>
+              <span>
+                {snapshotIndex + 1} / {snapshots.length}
+              </span>
+              <button
+                className="border px-2 py-1 disabled:opacity-50"
+                disabled={snapshotIndex === snapshots.length - 1}
+                onClick={() => setSnapshotIndex((index) => index + 1)}
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
           <div className="min-h-0 flex-1 overflow-hidden" ref={viewerRef}>
-            {slot && !slot.previous ? (
+            {current && !previous ? (
               <div className="h-full overflow-auto rounded border bg-background p-2 text-xs">
                 <JsonView
                   collapsed={2}
                   displayDataTypes={false}
                   enableClipboard={false}
                   shortenTextAfterLength={80}
-                  value={slot.current.data}
+                  value={current.data}
                 />
               </div>
-            ) : slot && height > 0 ? (
+            ) : current && height > 0 ? (
               <VirtualDiffViewer
                 className="min-w-0 text-xs"
                 height={height}
                 leftTitle="Previous"
-                newValue={slot.current.data}
-                oldValue={slot.previous?.data ?? {}}
+                newValue={current.data}
+                oldValue={previous?.data ?? {}}
                 rightTitle="Current"
               />
             ) : null}

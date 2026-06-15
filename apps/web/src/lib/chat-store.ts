@@ -3,8 +3,7 @@ import { create } from "zustand";
 
 export type ContextSnapshot = Pick<ContextSnapshotMessage, "context_id" | "data">;
 export type ContextSlot = {
-  current: ContextSnapshot;
-  previous: ContextSnapshot | null;
+  snapshots: ContextSnapshot[];
 };
 
 export type ToolCall = {
@@ -92,8 +91,10 @@ export const useChatStore = create<ChatState>((set) => ({
       contexts: {
         ...state.contexts,
         [context.context_id]: {
-          current: context,
-          previous: state.contexts[context.context_id]?.current ?? null,
+          snapshots: [
+            ...(state.contexts[context.context_id]?.snapshots ?? []),
+            context,
+          ],
         },
       },
       selectedContextId: context.context_id,
