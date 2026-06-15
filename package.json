@@ -24,6 +24,7 @@
   "scripts": {
     "dev": "vp run -r dev",
     "build": "vp run -r build",
+    "test": "vp test watch",
     "check-types": "vp run -r check-types",
     "check": "vp check && vp run -r check-types",
     "lint": "vp lint",
