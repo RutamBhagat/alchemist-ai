@@ -12,16 +12,20 @@ The main app shell in `apps/web/src/app/page.tsx` is responsible for rendering s
 
 The primary chat state is intentionally small:
 
-- `messages`: ordered user/agent turns.
-- User messages are `{ role: "user", text }`.
-- Agent messages are `{ role: "agent", parts }`.
-- Agent parts are either streamed text chunks keyed by `target`, or tool-call cards keyed by `call_id`.
+- `entryOrder`: ordered user entries and agent-stream entries.
+- `userMessagesById`: user messages keyed by stable user target id.
+- `streamsById`: agent response streams keyed by protocol `stream_id`.
+- `toolsByCallId`: tool calls keyed by protocol `call_id`.
 - `contexts`: a map from `context_id` to context snapshot history.
 - `selectedContextId`: the currently inspected context.
 
-A user send appends a user message and an empty agent message. Incoming tokens append into the last agent message. Consecutive tokens for the same target are merged into one stable text part instead of creating one React row per token. Tool results patch the existing tool card by `call_id`.
+A user send appends only a user entry. The first token, tool call, or stream end for a protocol `stream_id` creates that stream entry on demand. Incoming tokens append to the stream identified by `stream_id`, not to whichever agent response happens to be last in the rendered list.
 
-This model avoids expensive full-message rewrites while keeping enough structure for target selection, trace linking, tool cards, and context inspection.
+Each stream contains ordered parts. Consecutive tokens for the same text target are merged into one stable text part instead of creating one React row per token. A tool call freezes the current text part for that stream and appends a tool part keyed by `call_id`; the next token for the same stream creates a new text part after the tool card. Tool results patch `toolsByCallId[call_id]` after validating that the result belongs to the same `stream_id`.
+
+This model avoids cross-stream corruption when tokens, tool calls, and tool results from different streams are interleaved. It also avoids expensive full-message rewrites while keeping enough structure for target selection, trace linking, tool cards, and context inspection.
+
+The worker preserves the server's `stream_id` and `seq` in all UI-facing token/tool/result/end events. It keeps text targets per stream and tracks active streams independently, so one `STREAM_END` only completes the addressed stream.
 
 ## Sequence ordering and deduplication
 
@@ -98,7 +102,7 @@ The chat column, trace sidebar, and context sidebar are independently scrollable
 
 The design is intended to tolerate many streams and long responses by keeping protocol work in the worker, batching trace rows, merging consecutive token chunks, and avoiding raw per-token DOM nodes.
 
-For 50 active or historical streams, the main constraint would be UI memory and trace volume rather than WebSocket parsing. The current implementation keeps each turn in a simple linear message array and uses stable part merging, but it does not yet implement persistent storage or pruning.
+For 50 active or historical streams, the main constraint would be UI memory and trace volume rather than WebSocket parsing. The current implementation keeps ordered entry ids plus stream/tool maps and uses stable part merging, but it does not yet implement persistent storage or pruning.
 
 For responses 100x longer than the normal demo cases, the current approach remains structurally safe because tokens are merged into text parts and traces are virtualized. The main risk is memory growth from retaining all trace events and all context snapshots in memory for the session. A production version should add trace pruning/export, context snapshot limits, and persisted resumable session state.
 
