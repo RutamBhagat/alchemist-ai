@@ -1,4 +1,3 @@
-import { Undo2 } from "lucide-react";
 import { cn } from "@alchemist-ai/ui/lib/utils";
 import type { AgentStream, ToolCall } from "@/lib/chat-stream-model";
 import type { ChatEntry, UserMessage } from "@/lib/chat-store";
@@ -7,14 +6,12 @@ import { ToolCallCard } from "./tool-call-card";
 type BaseChatMessageProps = {
   onSelectText: (target: string) => void;
   onSelectTool: (callId: string) => void;
-  retryDisabled?: boolean;
   selectedTarget: string | null;
 };
 
 type ChatMessageProps =
   | (BaseChatMessageProps & {
       entry: Extract<ChatEntry, { kind: "user" }>;
-      onRetry?: () => void;
       userMessage: UserMessage;
     })
   | (BaseChatMessageProps & {
@@ -33,35 +30,21 @@ export function ChatMessage(props: ChatMessageProps) {
       )}
     >
       {"userMessage" in props ? (
-        <div className="space-y-1">
-          <div
-            className={cn(
-              "cursor-pointer whitespace-pre-wrap border bg-black p-3 text-sm leading-6 text-white",
-              selectedTarget === props.entry.id &&
-                "border-blue-500 ring-2 ring-blue-200",
-            )}
-            data-chat-target={props.entry.id}
-            onClick={() => onSelectText(props.entry.id)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") onSelectText(props.entry.id);
-            }}
-            role="button"
-            tabIndex={0}
-          >
-            {props.userMessage.text}
-          </div>
-          {props.onRetry ? (
-            <button
-              aria-label="Resume from this message"
-              className="ml-auto flex size-7 items-center justify-center border text-muted-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={props.retryDisabled}
-              onClick={props.onRetry}
-              title="Resume from this message"
-              type="button"
-            >
-              <Undo2 className="size-3.5" />
-            </button>
-          ) : null}
+        <div
+          className={cn(
+            "cursor-pointer whitespace-pre-wrap border bg-black p-3 text-sm leading-6 text-white",
+            selectedTarget === props.entry.id &&
+              "border-blue-500 ring-2 ring-blue-200",
+          )}
+          data-chat-target={props.entry.id}
+          onClick={() => onSelectText(props.entry.id)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") onSelectText(props.entry.id);
+          }}
+          role="button"
+          tabIndex={0}
+        >
+          {props.userMessage.text}
         </div>
       ) : (
         <div className="space-y-2">
