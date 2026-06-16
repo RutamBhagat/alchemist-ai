@@ -33,7 +33,12 @@ type TraceEvent = Extract<WorkerEvent, { kind: "trace" }>;
 type TraceRow =
   | TraceEvent
   | { kind: "token_group"; items: TraceEvent[] }
-  | { kind: "tool_group"; call: TraceEvent; ack?: TraceEvent; result?: TraceEvent };
+  | {
+      kind: "tool_group";
+      call: TraceEvent;
+      ack?: TraceEvent;
+      result?: TraceEvent;
+    };
 
 const icons = {
   TOKEN: Activity,
@@ -79,7 +84,8 @@ function rows(events: TraceEvent[]) {
       acks.delete(event.call_id);
     } else if (event.type === "TOOL_RESULT") {
       const tool = grouped.findLast(
-        (row) => row.kind === "tool_group" && row.call.call_id === event.call_id,
+        (row) =>
+          row.kind === "tool_group" && row.call.call_id === event.call_id,
       );
       if (tool?.kind === "tool_group" && !tool.result) {
         tool.result = event;
@@ -193,9 +199,6 @@ function Row({
             {rowText(row)}
           </span>
         )}
-        <span className="font-mono text-muted-foreground">
-          {time(event.at)}
-        </span>
         {target && (
           <Button
             aria-label="Show in chat"
@@ -207,6 +210,9 @@ function Row({
             <LocateFixed className="size-3" />
           </Button>
         )}
+        <span className="font-mono text-muted-foreground">
+          {time(event.at)}
+        </span>
       </div>
       <div className="mt-1 truncate pl-5 font-mono text-muted-foreground">
         {event.seq ? `#${event.seq} ` : ""}
