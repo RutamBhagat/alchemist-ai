@@ -14,6 +14,7 @@ type WorkerState = {
   reconnectTimer?: Timer;
   reconnectDelayMs: number;
   lastAppliedSeq: number;
+  activeStreamIds: Set<string>;
   textTargetsByStreamId: Map<string, string>;
   textTargetIdsByStreamId: Map<string, number>;
   userTarget: string | null;
@@ -27,6 +28,7 @@ type WorkerState = {
 const state: WorkerState = {
   reconnectDelayMs: 500,
   lastAppliedSeq: 0,
+  activeStreamIds: new Set(),
   textTargetsByStreamId: new Map(),
   textTargetIdsByStreamId: new Map(),
   userTarget: null,
@@ -90,6 +92,7 @@ function clearStreamIdleCheck() {
 
 function interruptTurn(message: string) {
   state.turnActive = false;
+  state.activeStreamIds.clear();
   clearResumeStallCheck();
   clearStreamIdleCheck();
   self.postMessage({ kind: "notification", type: "error", message });
@@ -127,6 +130,11 @@ function clearTextTarget(streamId: string) {
   state.textTargetsByStreamId.delete(streamId);
 }
 
+function markStreamActive(streamId: string) {
+  state.activeStreamIds.add(streamId);
+  markActive();
+}
+
 function applyToken(message: TokenMessage) {
   const target = textTarget(message.stream_id);
   self.postMessage({
@@ -142,14 +150,14 @@ function applyToken(message: TokenMessage) {
 function applyMessage(message: ServerMessage) {
   switch (message.type) {
     case "TOKEN":
-      markActive();
+      markStreamActive(message.stream_id);
       return applyToken(message);
     case "CONTEXT_SNAPSHOT":
       markActive();
       self.postMessage({ kind: "context", context_id: message.context_id, data: message.data });
       break;
     case "TOOL_CALL":
-      markActive();
+      markStreamActive(message.stream_id);
       self.postMessage({
         kind: "tool_call",
         seq: message.seq,
@@ -161,7 +169,7 @@ function applyMessage(message: ServerMessage) {
       clearTextTarget(message.stream_id);
       break;
     case "TOOL_RESULT":
-      markActive();
+      markStreamActive(message.stream_id);
       self.postMessage({
         kind: "tool_result",
         seq: message.seq,
@@ -175,10 +183,13 @@ function applyMessage(message: ServerMessage) {
     case "STREAM_END":
       self.postMessage({ kind: "stream_end", seq: message.seq, stream_id: message.stream_id });
       clearTextTarget(message.stream_id);
-      state.turnActive = false;
-      clearResumeStallCheck();
-      clearStreamIdleCheck();
-      markConnected();
+      state.activeStreamIds.delete(message.stream_id);
+      if (state.activeStreamIds.size === 0) {
+        state.turnActive = false;
+        clearResumeStallCheck();
+        clearStreamIdleCheck();
+        markConnected();
+      }
       break;
     case "ERROR":
       self.postMessage({ kind: "notification", type: "error", message: message.message });
@@ -225,7 +236,7 @@ function connect(resume: boolean) {
     clearTimeout(state.waitTimer);
     clearResumeStallCheck();
     clearStreamIdleCheck();
-    if (state.turnActive) scheduleReconnect();
+    if (state.turnActive || state.activeStreamIds.size > 0) scheduleReconnect();
     else self.postMessage({ kind: "connection", status: "disconnected" });
     self.postMessage({ kind: "notification", type: "error", message: "Connection lost." });
   }
@@ -287,6 +298,7 @@ function startTurn() {
   state.answeredPingSeqs.clear();
   state.reconnectDelayMs = 500;
   state.lastAppliedSeq = 0;
+  state.activeStreamIds.clear();
   state.textTargetsByStreamId.clear();
   state.textTargetIdsByStreamId.clear();
   state.userTarget = `user:${++state.userTargetId}`;
