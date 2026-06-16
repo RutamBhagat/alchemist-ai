@@ -2,12 +2,19 @@ import { trace, traceOut } from "./agent-trace";
 import { serverMessageSchema } from "./protocol";
 import { createSequenceGate } from "./sequence-gate";
 import type { ServerMessage, TokenMessage } from "../../../agent-server/src/types";
+import type { AttemptId, TurnId } from "./worker-events";
 
-type UiToWorker = { type: "send"; content: string };
+type UiToWorker = {
+  type: "send";
+  content: string;
+  turnId: TurnId;
+  attemptId: AttemptId;
+};
+type QueuedTurn = { content: string; turnId: TurnId; attemptId: AttemptId };
 type Timer = ReturnType<typeof setTimeout>;
 type WorkerState = {
   socket?: WebSocket;
-  queued?: string;
+  queued?: QueuedTurn;
   waitTimer?: Timer;
   resumeStallTimer?: Timer;
   streamIdleTimer?: Timer;
@@ -17,8 +24,9 @@ type WorkerState = {
   activeStreamIds: Set<string>;
   textTargetsByStreamId: Map<string, string>;
   textTargetIdsByStreamId: Map<string, number>;
+  turnId: TurnId | null;
+  attemptId: AttemptId | null;
   userTarget: string | null;
-  userTargetId: number;
   turnActive: boolean;
   ackedToolCalls: Set<string>;
   answeredPingSeqs: Set<number>;
@@ -31,8 +39,9 @@ const state: WorkerState = {
   activeStreamIds: new Set(),
   textTargetsByStreamId: new Map(),
   textTargetIdsByStreamId: new Map(),
+  turnId: null,
+  attemptId: null,
   userTarget: null,
-  userTargetId: 0,
   turnActive: false,
   ackedToolCalls: new Set(),
   answeredPingSeqs: new Set(),
@@ -43,6 +52,34 @@ const LATENCY_SPIKE_AFTER_MS = 2000;
 const RESUME_STALL_AFTER_MS = 4000;
 const STREAM_IDLE_INTERRUPT_AFTER_MS = 12000;
 const MAX_RECONNECT_AFTER_MS = 10000;
+
+function activeIdentity(extra: Record<string, string | undefined> = {}) {
+  return {
+    turnId: state.turnId ?? undefined,
+    attemptId: state.attemptId ?? undefined,
+    ...extra,
+  };
+}
+
+function attemptScopedId(kind: "stream" | "call", id: string) {
+  return state.attemptId ? `${state.attemptId}:${kind}:${id}` : id;
+}
+
+function clientStreamId(streamId: string) {
+  return attemptScopedId("stream", streamId);
+}
+
+function clientCallId(callId: string) {
+  return attemptScopedId("call", callId);
+}
+
+function traceIdentity(message: ServerMessage, target?: string) {
+  return activeIdentity({
+    stream_id: "stream_id" in message ? clientStreamId(message.stream_id) : undefined,
+    call_id: "call_id" in message ? clientCallId(message.call_id) : undefined,
+    target,
+  });
+}
 
 function markActive() {
   self.postMessage({ kind: "connection", status: "streaming" });
@@ -71,13 +108,13 @@ function parseServerMessage(data: string): ServerMessage | null {
 
 function sendTurn(content: string) {
   state.socket?.send(JSON.stringify({ type: "USER_MESSAGE", content }));
-  traceOut("USER_MESSAGE", content, undefined, state.userTarget ?? undefined);
+  traceOut("USER_MESSAGE", content, activeIdentity({ target: state.userTarget ?? undefined }));
   scheduleStreamIdleCheck();
 }
 
 function resumeTurn() {
   state.socket?.send(JSON.stringify({ type: "RESUME", last_seq: state.lastAppliedSeq }));
-  traceOut("RESUME", `last_seq ${state.lastAppliedSeq}`);
+  traceOut("RESUME", `last_seq ${state.lastAppliedSeq}`, activeIdentity());
 }
 
 function clearResumeStallCheck() {
@@ -136,11 +173,14 @@ function markStreamActive(streamId: string) {
 }
 
 function applyToken(message: TokenMessage) {
-  const target = textTarget(message.stream_id);
+  const streamId = clientStreamId(message.stream_id);
+  const target = textTarget(streamId);
   self.postMessage({
     kind: "token",
+    turnId: state.turnId,
+    attemptId: state.attemptId,
     seq: message.seq,
-    stream_id: message.stream_id,
+    stream_id: streamId,
     text: message.text,
     target,
   });
@@ -154,35 +194,51 @@ function applyMessage(message: ServerMessage) {
       return applyToken(message);
     case "CONTEXT_SNAPSHOT":
       markActive();
-      self.postMessage({ kind: "context", context_id: message.context_id, data: message.data });
+      self.postMessage({
+        kind: "context",
+        turnId: state.turnId,
+        attemptId: state.attemptId,
+        context_id: message.context_id,
+        data: message.data,
+      });
       break;
     case "TOOL_CALL":
       markStreamActive(message.stream_id);
       self.postMessage({
         kind: "tool_call",
+        turnId: state.turnId,
+        attemptId: state.attemptId,
         seq: message.seq,
-        stream_id: message.stream_id,
-        call_id: message.call_id,
+        stream_id: clientStreamId(message.stream_id),
+        call_id: clientCallId(message.call_id),
         tool_name: message.tool_name,
         args: message.args,
       });
-      clearTextTarget(message.stream_id);
+      clearTextTarget(clientStreamId(message.stream_id));
       break;
     case "TOOL_RESULT":
       markStreamActive(message.stream_id);
       self.postMessage({
         kind: "tool_result",
+        turnId: state.turnId,
+        attemptId: state.attemptId,
         seq: message.seq,
-        stream_id: message.stream_id,
-        call_id: message.call_id,
+        stream_id: clientStreamId(message.stream_id),
+        call_id: clientCallId(message.call_id),
         result: message.result,
       });
       break;
     case "PING":
       break;
     case "STREAM_END":
-      self.postMessage({ kind: "stream_end", seq: message.seq, stream_id: message.stream_id });
-      clearTextTarget(message.stream_id);
+      self.postMessage({
+        kind: "stream_end",
+        turnId: state.turnId,
+        attemptId: state.attemptId,
+        seq: message.seq,
+        stream_id: clientStreamId(message.stream_id),
+      });
+      clearTextTarget(clientStreamId(message.stream_id));
       state.activeStreamIds.delete(message.stream_id);
       if (state.activeStreamIds.size === 0) {
         state.turnActive = false;
@@ -225,7 +281,10 @@ function connect(resume: boolean) {
     }
     const queued = state.queued;
     if (!queued) return;
-    sendTurn(queued);
+    state.turnId = queued.turnId;
+    state.attemptId = queued.attemptId;
+    state.userTarget = queued.turnId;
+    sendTurn(queued.content);
     state.queued = undefined;
   };
 
@@ -251,24 +310,33 @@ function connect(resume: boolean) {
 
     if (message.type === "PING" && !state.answeredPingSeqs.has(message.seq)) {
       state.answeredPingSeqs.add(message.seq);
-      trace(message, receivedAt);
+      trace(message, receivedAt, undefined, traceIdentity(message));
       currentSocket.send(JSON.stringify({ type: "PONG", echo: message.challenge }));
-      traceOut("PONG", `echo ${message.challenge || "(empty)"}`);
+      traceOut("PONG", `echo ${message.challenge || "(empty)"}`, activeIdentity());
     }
 
     if (message.type === "TOOL_CALL" && !state.ackedToolCalls.has(message.call_id)) {
       state.ackedToolCalls.add(message.call_id);
       currentSocket.send(JSON.stringify({ type: "TOOL_ACK", call_id: message.call_id }));
-      traceOut("TOOL_ACK", message.call_id, message.call_id);
+      traceOut(
+        "TOOL_ACK",
+        message.call_id,
+        activeIdentity({ call_id: clientCallId(message.call_id) }),
+      );
     }
 
     for (const orderedMessage of state.sequenceGate.accept(message)) {
       if (orderedMessage.type !== "PING" && orderedMessage.type !== "TOKEN") {
-        trace(orderedMessage, receivedAt);
+        trace(orderedMessage, receivedAt, undefined, traceIdentity(orderedMessage));
       }
       const target = applyMessage(orderedMessage);
       if (orderedMessage.type === "TOKEN" && target) {
-        trace(orderedMessage, receivedAt, orderedMessage.text, target);
+        trace(
+          orderedMessage,
+          receivedAt,
+          orderedMessage.text,
+          traceIdentity(orderedMessage, target),
+        );
       }
       if (orderedMessage.type !== "PING") {
         state.lastAppliedSeq = orderedMessage.seq;
@@ -290,7 +358,7 @@ function scheduleReconnect() {
   state.reconnectDelayMs = Math.min(state.reconnectDelayMs * 2, MAX_RECONNECT_AFTER_MS);
 }
 
-function startTurn() {
+function startTurn(turnId: TurnId, attemptId: AttemptId) {
   clearResumeStallCheck();
   clearStreamIdleCheck();
   state.sequenceGate.startTurn();
@@ -301,23 +369,27 @@ function startTurn() {
   state.activeStreamIds.clear();
   state.textTargetsByStreamId.clear();
   state.textTargetIdsByStreamId.clear();
-  state.userTarget = `user:${++state.userTargetId}`;
+  state.turnId = turnId;
+  state.attemptId = attemptId;
+  state.userTarget = turnId;
   state.turnActive = true;
 }
 
-function sendUserMessage(content: string) {
+function sendUserMessage(content: string, turnId: TurnId, attemptId: AttemptId) {
   clearTimeout(state.reconnectTimer);
-  startTurn();
+  startTurn(turnId, attemptId);
   if (state.socket?.readyState === WebSocket.OPEN) {
     sendTurn(content);
     return;
   }
 
-  state.queued = content;
+  state.queued = { content, turnId, attemptId };
   if (state.socket?.readyState === WebSocket.CONNECTING) return;
   connect(false);
 }
 
 self.onmessage = (event: MessageEvent<UiToWorker>) => {
-  if (event.data.type === "send") sendUserMessage(event.data.content);
+  if (event.data.type === "send") {
+    sendUserMessage(event.data.content, event.data.turnId, event.data.attemptId);
+  }
 };
