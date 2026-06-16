@@ -16,6 +16,14 @@ The client sends `RESUME(last_seq)` immediately after reconnect and replays any 
 
 The mock backend does not resume aborted script execution after a WebSocket reconnect. Therefore, if the backend drops before generating the rest of a stream or a pending `TOOL_RESULT`, the frontend cannot reconstruct those missing future events without violating the protocol. The UI preserves already-rendered text/tool cards and marks the response as interrupted rather than resending the user message or fabricating continuation.
 
+## UI-consumed sequence tracking approximation
+
+The worker treats an event as applied once it has passed schema validation, sequence ordering/deduplication, and has been posted to the main thread for the corresponding UI state update. In the strictest interpretation, `last_seq` would advance only after React has committed the rendered DOM update. I am intentionally not adding that main-thread acknowledgement loop.
+
+This is a deliberate practical approximation. The protocol state, ordering buffer, reconnection logic, heartbeat handling, and ACK path all live in the Web Worker, while the main thread receives small typed events that synchronously update the Zustand store. The rendering path is kept lightweight: streamed text is appended to stable message parts, tool calls/results patch existing state by target id or `call_id`, the trace list is batched and virtualized, and large context rendering is isolated in the context panel. Under these constraints, the gap between worker postMessage and visible UI application is not a meaningful recovery boundary for this assignment.
+
+The tradeoff is that a browser crash, tab termination, or catastrophic React runtime failure between `postMessage` and commit could make `last_seq` slightly ahead of what was visibly painted. The app accepts that risk because adding per-event DOM commit acknowledgements would add latency, scheduling coupling, and backpressure to the protocol loop, making `PONG`, `TOOL_ACK`, and chaos-mode recovery less reliable in the common case.
+
 ## Chaos-mode TOOL_ACK log interpretation
 
 In chaos mode, the server can delay, buffer, or reorder a `TOOL_CALL` before the browser receives it. The server-side ACK timeout may continue running during that delay. If the timeout expires before the `TOOL_CALL` is delivered to the client, the server logs `TOOL_ACK_TIMEOUT`.
