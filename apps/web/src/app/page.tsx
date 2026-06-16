@@ -39,7 +39,10 @@ export default function Home() {
   const pendingTraceEvents = useRef<TraceEvent[]>([]);
   const traceFlush = useRef<number | null>(null);
   const worker = useRef<Worker | null>(null);
-  const messages = useChatStore((state) => state.messages);
+  const entryOrder = useChatStore((state) => state.entryOrder);
+  const userMessagesById = useChatStore((state) => state.userMessagesById);
+  const streamsById = useChatStore((state) => state.streamsById);
+  const toolsByCallId = useChatStore((state) => state.toolsByCallId);
   const contexts = useChatStore((state) => state.contexts);
   const selectedContextId = useChatStore((state) => state.selectedContextId);
   const addUserMessage = useChatStore((state) => state.addUserMessage);
@@ -49,6 +52,7 @@ export default function Home() {
   const appendToken = useChatStore((state) => state.appendToken);
   const addToolCall = useChatStore((state) => state.addToolCall);
   const setToolResult = useChatStore((state) => state.setToolResult);
+  const endStream = useChatStore((state) => state.endStream);
   const setContext = useChatStore((state) => state.setContext);
   const selectContext = useChatStore((state) => state.selectContext);
   const serverResponding =
@@ -95,7 +99,12 @@ export default function Home() {
           autoResumeLastUserMessage();
           break;
         case "token":
-          appendToken(event.data.text, event.data.target);
+          appendToken({
+            stream_id: event.data.stream_id,
+            seq: event.data.seq,
+            text: event.data.text,
+            target: event.data.target,
+          });
           break;
         case "context":
           setContext({
@@ -105,14 +114,27 @@ export default function Home() {
           break;
         case "tool_call":
           addToolCall({
-            id: event.data.call_id,
+            stream_id: event.data.stream_id,
+            seq: event.data.seq,
+            call_id: event.data.call_id,
             tool_name: event.data.tool_name,
             args: event.data.args,
-            result: event.data.result,
           });
           break;
         case "tool_result":
-          setToolResult(event.data.call_id, event.data.result);
+          setToolResult({
+            stream_id: event.data.stream_id,
+            seq: event.data.seq,
+            call_id: event.data.call_id,
+            result: event.data.result,
+          });
+          break;
+        case "stream_end":
+          endStream({
+            stream_id: event.data.stream_id,
+            seq: event.data.seq,
+          });
+          setAwaitingResponse(false);
           break;
       }
     };
@@ -120,14 +142,14 @@ export default function Home() {
       if (traceFlush.current !== null) cancelAnimationFrame(traceFlush.current);
       worker.current?.terminate();
     };
-  }, [addToolCall, appendToken, setContext, setToolResult]);
+  }, [addToolCall, appendToken, endStream, setContext, setToolResult]);
 
   useEffect(() => {
     if (!autoScroll) return;
     const list = messageList.current;
     if (!list) return;
     list.scrollTop = list.scrollHeight;
-  }, [autoScroll, messages]);
+  }, [autoScroll, entryOrder, streamsById, toolsByCallId]);
 
   useEffect(() => {
     if (!selectedTraceTarget) return;
@@ -166,11 +188,11 @@ export default function Home() {
   function autoResumeLastUserMessage() {
     const state = useChatStore.getState();
 
-    for (let index = state.messages.length - 1; index >= 0; index--) {
-      const message = state.messages[index];
-      if (message?.role !== "user") continue;
+    for (let index = state.entryOrder.length - 1; index >= 0; index--) {
+      const entry = state.entryOrder[index];
+      if (entry?.kind !== "user") continue;
 
-      const content = message.text.trim();
+      const content = state.userMessagesById[entry.id]?.text.trim();
       if (!content) return;
 
       clearTrace();
@@ -197,8 +219,6 @@ export default function Home() {
     sendToWorker(message);
   };
 
-  let userIndex = 0;
-
   return (
     <SidebarProvider
       defaultOpen
@@ -219,25 +239,42 @@ export default function Home() {
                 className="min-h-0 flex-1 space-y-3 overflow-y-auto py-4"
                 ref={messageList}
               >
-                {messages.map((message, index) => {
-                  const userTarget =
-                    message.role === "user" ? `user:${++userIndex}` : null;
+                {entryOrder.map((entry, index) => {
+                  if (entry.kind === "user") {
+                    const userMessage = userMessagesById[entry.id];
+                    if (!userMessage) return null;
+
+                    return (
+                      <ChatMessage
+                        key={entry.id}
+                        entry={entry}
+                        onRetry={() => resumeFromMessage(index, userMessage.text)}
+                        onSelectText={selectTraceTarget}
+                        onSelectTool={(callId) =>
+                          selectTraceTarget(`call:${callId}`)
+                        }
+                        retryDisabled={serverResponding}
+                        selectedTarget={selectedTraceTarget}
+                        userMessage={userMessage}
+                      />
+                    );
+                  }
+
+                  const stream = streamsById[entry.stream_id];
+                  if (!stream) return null;
+
                   return (
                     <ChatMessage
-                      key={index}
-                      message={message}
-                      onRetry={
-                        message.role === "user"
-                          ? () => resumeFromMessage(index, message.text)
-                          : undefined
-                      }
+                      key={entry.stream_id}
+                      entry={entry}
                       onSelectText={selectTraceTarget}
                       onSelectTool={(callId) =>
                         selectTraceTarget(`call:${callId}`)
                       }
                       retryDisabled={serverResponding}
                       selectedTarget={selectedTraceTarget}
-                      userTarget={userTarget}
+                      stream={stream}
+                      toolsByCallId={toolsByCallId}
                     />
                   );
                 })}
