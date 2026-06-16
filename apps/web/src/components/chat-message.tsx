@@ -1,56 +1,61 @@
 import { Undo2 } from "lucide-react";
 import { cn } from "@alchemist-ai/ui/lib/utils";
-import type { Message } from "@/lib/chat-store";
+import type { AgentStream, ToolCall } from "@/lib/chat-stream-model";
+import type { ChatEntry, UserMessage } from "@/lib/chat-store";
 import { ToolCallCard } from "./tool-call-card";
 
-type ChatMessageProps = {
+type BaseChatMessageProps = {
   onSelectText: (target: string) => void;
-  message: Message;
   onSelectTool: (callId: string) => void;
-  onRetry?: () => void;
   retryDisabled?: boolean;
   selectedTarget: string | null;
-  userTarget: string | null;
 };
 
-export function ChatMessage({
-  message,
-  onRetry,
-  onSelectText,
-  onSelectTool,
-  retryDisabled = false,
-  selectedTarget,
-  userTarget,
-}: ChatMessageProps) {
+type ChatMessageProps =
+  | (BaseChatMessageProps & {
+      entry: Extract<ChatEntry, { kind: "user" }>;
+      onRetry?: () => void;
+      userMessage: UserMessage;
+    })
+  | (BaseChatMessageProps & {
+      entry: Extract<ChatEntry, { kind: "agent_stream" }>;
+      stream: AgentStream;
+      toolsByCallId: Record<string, ToolCall>;
+    });
+
+export function ChatMessage(props: ChatMessageProps) {
+  const { entry, onSelectText, onSelectTool, selectedTarget } = props;
+
   return (
     <div
       className={cn(
-        message.role === "user" ? "ml-auto w-fit max-w-[80%]" : "w-full",
+        entry.kind === "user" ? "ml-auto w-fit max-w-[80%]" : "w-full",
       )}
     >
-      {message.role === "user" ? (
+      {"userMessage" in props ? (
         <div className="space-y-1">
           <div
             className={cn(
               "cursor-pointer whitespace-pre-wrap border bg-black p-3 text-sm leading-6 text-white",
-              selectedTarget === userTarget && "border-blue-500 ring-2 ring-blue-200",
+              selectedTarget === props.entry.id &&
+                "border-blue-500 ring-2 ring-blue-200",
             )}
-            data-chat-target={userTarget ?? undefined}
-            onClick={() => userTarget && onSelectText(userTarget)}
+            data-chat-target={props.entry.id}
+            onClick={() => onSelectText(props.entry.id)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && userTarget) onSelectText(userTarget);
+              if (event.key === "Enter") onSelectText(props.entry.id);
             }}
             role="button"
             tabIndex={0}
           >
-            {message.text}
+            {props.userMessage.text}
           </div>
-          {onRetry ? (
+          {props.onRetry ? (
             <button
               aria-label="Resume from this message"
               className="ml-auto flex size-7 items-center justify-center border text-muted-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={retryDisabled}
-              onClick={onRetry}
+              disabled={props.retryDisabled}
+              onClick={props.onRetry}
               title="Resume from this message"
               type="button"
             >
@@ -60,8 +65,8 @@ export function ChatMessage({
         </div>
       ) : (
         <div className="space-y-2">
-          {message.parts.length ? (
-            message.parts.map((part, index) => {
+          {props.stream.parts.length ? (
+            props.stream.parts.map((part) => {
               if (part.kind === "text") {
                 return (
                   <div
@@ -70,7 +75,7 @@ export function ChatMessage({
                       selectedTarget === part.target && "border-blue-500 bg-blue-50",
                     )}
                     data-chat-target={part.target}
-                    key={index}
+                    key={part.id}
                     onClick={() => onSelectText(part.target)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") onSelectText(part.target);
@@ -82,13 +87,19 @@ export function ChatMessage({
                   </div>
                 );
               }
+
+              const tool = props.toolsByCallId[part.call_id];
+              if (!tool) {
+                return null;
+              }
+
               return (
                 <ToolCallCard
-                  key={part.tool.id}
-                  onSelect={() => onSelectTool(part.tool.id)}
-                  selected={selectedTarget === `call:${part.tool.id}`}
-                  target={`call:${part.tool.id}`}
-                  tool={part.tool}
+                  key={part.call_id}
+                  onSelect={() => onSelectTool(part.call_id)}
+                  selected={selectedTarget === `call:${part.call_id}`}
+                  target={`call:${part.call_id}`}
+                  tool={tool}
                 />
               );
             })
