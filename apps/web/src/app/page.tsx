@@ -43,6 +43,9 @@ export default function Home() {
   const contexts = useChatStore((state) => state.contexts);
   const selectedContextId = useChatStore((state) => state.selectedContextId);
   const addUserMessage = useChatStore((state) => state.addUserMessage);
+  const retryFromUserMessage = useChatStore(
+    (state) => state.retryFromUserMessage,
+  );
   const appendToken = useChatStore((state) => state.appendToken);
   const addToolCall = useChatStore((state) => state.addToolCall);
   const setToolResult = useChatStore((state) => state.setToolResult);
@@ -144,14 +147,37 @@ export default function Home() {
     element?.scrollIntoView({ block: "center", behavior: "smooth" });
   };
 
+  const sendToWorker = (content: string) => {
+    setAwaitingResponse(true);
+    worker.current?.postMessage({ type: "send", content });
+  };
+
+  const clearTrace = () => {
+    if (traceFlush.current !== null) {
+      cancelAnimationFrame(traceFlush.current);
+      traceFlush.current = null;
+    }
+    pendingTraceEvents.current = [];
+    setTraceEvents([]);
+    setSelectedTraceTarget(null);
+  };
+
   const submit = () => {
     const content = draft.trim();
     if (!content || serverResponding) return;
     addUserMessage(content);
-    setAwaitingResponse(true);
-    worker.current?.postMessage({ type: "send", content });
+    sendToWorker(content);
     setDraft("");
   };
+
+  const resumeFromMessage = (messageIndex: number, content: string) => {
+    const message = content.trim();
+    if (!message || serverResponding) return;
+    clearTrace();
+    retryFromUserMessage(messageIndex);
+    sendToWorker(message);
+  };
+
   let userIndex = 0;
 
   return (
@@ -181,10 +207,16 @@ export default function Home() {
                     <ChatMessage
                       key={index}
                       message={message}
+                      onRetry={
+                        message.role === "user"
+                          ? () => resumeFromMessage(index, message.text)
+                          : undefined
+                      }
                       onSelectText={selectTraceTarget}
                       onSelectTool={(callId) =>
                         selectTraceTarget(`call:${callId}`)
                       }
+                      retryDisabled={serverResponding}
                       selectedTarget={selectedTraceTarget}
                       userTarget={userTarget}
                     />
