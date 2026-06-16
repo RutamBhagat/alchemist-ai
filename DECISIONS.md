@@ -15,3 +15,16 @@ This is not fixable purely in the frontend without weakening another protocol re
 The client sends `RESUME(last_seq)` immediately after reconnect and replays any server-generated events after the last fully applied sequence number. This recovers events already stored in server history.
 
 The mock backend does not resume aborted script execution after a WebSocket reconnect. Therefore, if the backend drops before generating the rest of a stream or a pending `TOOL_RESULT`, the frontend cannot reconstruct those missing future events without violating the protocol. The UI preserves already-rendered text/tool cards and marks the response as interrupted rather than resending the user message or fabricating continuation.
+
+## Chaos-mode TOOL_ACK log interpretation
+
+In chaos mode, the server can delay, buffer, or reorder a `TOOL_CALL` before the browser receives it. The server-side ACK timeout may continue running during that delay. If the timeout expires before the `TOOL_CALL` is delivered to the client, the server logs `TOOL_ACK_TIMEOUT`.
+
+When the delayed `TOOL_CALL` eventually reaches the client, the worker still sends `TOOL_ACK` immediately, because that is the only protocol-correct action available after receiving a valid tool call. At that point, however, the server may have already removed the pending ACK entry, so the later ACK is logged as `unexpected`.
+
+The observed chaos-mode pattern:
+
+```json
+{ "type": "TOOL_ACK_TIMEOUT", "verdict": "violation" }
+{ "type": "TOOL_ACK", "verdict": "unexpected" }
+```
