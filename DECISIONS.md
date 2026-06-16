@@ -6,7 +6,7 @@ The WebSocket protocol loop lives in `apps/web/src/lib/agent.worker.ts`, not in 
 
 This split is deliberate. Protocol messages such as `PONG` and `TOOL_ACK` should not depend on React scheduling, rendering, virtualization, or expensive JSON diff rendering. The UI can be busy without slowing down the server-visible protocol path.
 
-The main app shell in `apps/web/src/app/page.tsx` is responsible for rendering state, trace batching, context selection, and user-triggered sends/retries. It does not parse raw WebSocket messages.
+The main app shell is split between `apps/web/src/app/page.tsx` and `apps/web/src/app/home-client.tsx`. It is responsible for rendering state, trace batching, context selection, user-triggered sends, and automatic interrupted-turn recovery. It does not parse raw WebSocket messages.
 
 ## State data model
 
@@ -70,11 +70,11 @@ The mock backend aborts active script execution when a WebSocket reconnect/new c
 The UI handles this in two layers:
 
 1. First, use protocol resume/replay. Already-generated events after `last_seq` are applied in order by the worker.
-2. If the worker determines the active turn cannot continue and emits `turn_interrupted`, the page automatically retries the latest user message. It truncates chat state back to that user message, creates a fresh empty agent response slot, clears stale trace/context selection state, and resends the same text through the normal worker send path.
+2. If the worker determines the active turn cannot continue and emits `turn_interrupted`, the page automatically finds the latest user message and sends the same text as a new attempt through the normal worker send path.
 
-This automatic retry is intentionally not called a true stream continuation. It is a user-message replay fallback for a backend that cannot continue an aborted script. The user also has a manual undo-arrow button under each user message. Clicking it performs the same truncation-and-resend flow from that selected message, which is useful when the user wants to recover from an earlier point in the thread.
+This automatic retry is intentionally not called a true stream continuation. It is a user-message replay fallback for a backend that cannot continue an aborted script. The fallback does not truncate chat state, clear trace rows, clear context snapshots, remove streams/tools, or expose a manual undo-arrow retry button. The interrupted attempt remains visible for debugging, and the regenerated attempt is appended as new stream/tool/context events under a fresh attempt id.
 
-The automatic path bypasses the normal `serverResponding` guard because it runs only after the worker has declared the prior turn interrupted. Manual clicks still respect the guard so the user cannot start overlapping sends during an active turn.
+The automatic path bypasses the normal `serverResponding` guard because it runs only after the worker has declared the prior turn interrupted.
 
 ## Trace UI
 
@@ -82,7 +82,7 @@ Trace events are appended separately from chat state. The worker emits trace row
 
 The page batches trace updates with `requestAnimationFrame` so streaming tokens do not force one React state update per protocol event. The trace sidebar groups related rows, including consecutive tokens and tool-call/ACK/result flows, and virtualizes the list so long streams remain usable.
 
-When the retry fallback runs, stale trace rows are cleared. This prevents the new regenerated response from being visually mixed with trace rows from the abandoned interrupted attempt.
+When the retry fallback runs, existing trace rows are kept. A local `RETRY_STARTED` system trace is appended so the recovery attempt is visible without hiding the interrupted attempt that led to it.
 
 ## Context rendering and diffing
 
@@ -114,7 +114,7 @@ The frontend cannot continue backend script execution after the supplied server 
 
 Automatic retry can regenerate a response that differs from the interrupted response if the backend script is nondeterministic or time-sensitive. For the mock assignment backend this is acceptable; for a real agent this would require idempotency keys, server-side durable runs, or explicit user confirmation before replaying side-effecting tool calls.
 
-The manual undo-arrow retry and automatic interrupted-turn retry both clear later chat state. This is intentional: the regenerated branch should not coexist with stale messages or tool results produced by the abandoned branch.
+Automatic interrupted-turn retry intentionally does not clear later chat state, trace rows, tools, or context snapshots. This preserves diagnostic state, but it can leave an interrupted partial attempt visible alongside the regenerated attempt.
 
 All state is in memory. A full tab reload loses chat, trace, and context state. Persistent session recovery is outside the frontend-only constraints of this assignment.
 
