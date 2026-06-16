@@ -25,11 +25,6 @@ import { useEffect, useRef, useState } from "react";
 
 type TraceEvent = Extract<WorkerEvent, { kind: "trace" }>;
 
-type DebugStateSnapshot = Pick<
-  ReturnType<typeof useChatStore.getState>,
-  "contexts" | "selectedContextId" | "streamOrder" | "streamsById" | "toolsByCallId"
->;
-
 export default function HomeClient() {
   const [draft, setDraft] = useState("");
   const [autoScroll] = useState(process.env.NODE_ENV === "development");
@@ -53,9 +48,6 @@ export default function HomeClient() {
   const contexts = useChatStore((state) => state.contexts);
   const selectedContextId = useChatStore((state) => state.selectedContextId);
   const addUserMessage = useChatStore((state) => state.addUserMessage);
-  const retryFromUserMessage = useChatStore(
-    (state) => state.retryFromUserMessage,
-  );
   const appendToken = useChatStore((state) => state.appendToken);
   const addToolCall = useChatStore((state) => state.addToolCall);
   const setToolResult = useChatStore((state) => state.setToolResult);
@@ -183,36 +175,6 @@ export default function HomeClient() {
     return `${turnId}:attempt:${attemptNumber}`;
   }
 
-  function snapshotDebugState(): DebugStateSnapshot {
-    const state = useChatStore.getState();
-    return {
-      contexts: state.contexts,
-      selectedContextId: state.selectedContextId,
-      streamOrder: state.streamOrder,
-      streamsById: state.streamsById,
-      toolsByCallId: state.toolsByCallId,
-    };
-  }
-
-  function restoreDebugState(snapshot: DebugStateSnapshot) {
-    useChatStore.setState((state) => ({
-      contexts: snapshot.contexts,
-      selectedContextId:
-        snapshot.selectedContextId && snapshot.contexts[snapshot.selectedContextId]
-          ? snapshot.selectedContextId
-          : state.selectedContextId,
-      streamOrder: snapshot.streamOrder,
-      streamsById: snapshot.streamsById,
-      toolsByCallId: snapshot.toolsByCallId,
-    }));
-  }
-
-  function retryPreservingDebugState(entryIndex: number) {
-    const snapshot = snapshotDebugState();
-    retryFromUserMessage(entryIndex);
-    restoreDebugState(snapshot);
-  }
-
   function appendSystemTrace(turnId: string, attemptId: string) {
     const event: TraceEvent = {
       kind: "trace",
@@ -245,7 +207,6 @@ export default function HomeClient() {
 
       const turnId = entry.id;
       const attemptId = nextAttemptId(turnId);
-      retryPreservingDebugState(index);
       appendSystemTrace(turnId, attemptId);
       sendToWorker(content, turnId, attemptId);
       toast.info("Retrying the last message after stalled recovery.");
@@ -263,18 +224,6 @@ export default function HomeClient() {
     const turnId = entry.id;
     sendToWorker(content, turnId, nextAttemptId(turnId));
     setDraft("");
-  };
-
-  const resumeFromMessage = (messageIndex: number, content: string) => {
-    const message = content.trim();
-    if (!message || serverResponding) return;
-    const entry = useChatStore.getState().entryOrder[messageIndex];
-    if (entry?.kind !== "user") return;
-    const turnId = entry.id;
-    const attemptId = nextAttemptId(turnId);
-    retryPreservingDebugState(messageIndex);
-    appendSystemTrace(turnId, attemptId);
-    sendToWorker(message, turnId, attemptId);
   };
 
   return (
@@ -301,7 +250,7 @@ export default function HomeClient() {
                 className="min-h-0 flex-1 space-y-3 overflow-y-auto py-4"
                 ref={messageList}
               >
-                {entryOrder.map((entry, index) => {
+                {entryOrder.map((entry) => {
                   if (entry.kind === "user") {
                     const userMessage = userMessagesById[entry.id];
                     if (!userMessage) return null;
@@ -310,12 +259,10 @@ export default function HomeClient() {
                       <ChatMessage
                         key={entry.id}
                         entry={entry}
-                        onRetry={() => resumeFromMessage(index, userMessage.text)}
                         onSelectText={selectTraceTarget}
                         onSelectTool={(callId) =>
                           selectTraceTarget(`call:${callId}`)
                         }
-                        retryDisabled={serverResponding}
                         selectedTarget={selectedTraceTarget}
                         userMessage={userMessage}
                       />
@@ -333,7 +280,6 @@ export default function HomeClient() {
                       onSelectTool={(callId) =>
                         selectTraceTarget(`call:${callId}`)
                       }
-                      retryDisabled={serverResponding}
                       selectedTarget={selectedTraceTarget}
                       stream={stream}
                       toolsByCallId={toolsByCallId}
