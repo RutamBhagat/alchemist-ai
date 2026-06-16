@@ -1,7 +1,8 @@
 import type {
   ScriptContextEvent,
-  ScriptTokenEvent,
   ServerMessage,
+  StreamEndMessage,
+  TokenMessage,
   ToolCallMessage,
   ToolResultMessage,
 } from "../../../agent-server/src/types";
@@ -16,7 +17,13 @@ export type ConnectionStatus =
   | "disconnected";
 
 export type WorkerEvent =
-  | (ScriptTokenEvent & { target: string })
+  | {
+      kind: "token";
+      seq: TokenMessage["seq"];
+      stream_id: TokenMessage["stream_id"];
+      text: TokenMessage["text"];
+      target: string;
+    }
   | ScriptContextEvent
   | { kind: "turn_interrupted" }
   | { kind: "notification"; type: "error"; message: string }
@@ -36,6 +43,8 @@ export type WorkerEvent =
     }
   | {
       kind: "tool_call";
+      seq: ToolCallMessage["seq"];
+      stream_id: ToolCallMessage["stream_id"];
       call_id: ToolCallMessage["call_id"];
       tool_name: ToolCallMessage["tool_name"];
       args: ToolCallMessage["args"];
@@ -43,6 +52,13 @@ export type WorkerEvent =
     }
   | {
       kind: "tool_result";
+      seq: ToolResultMessage["seq"];
+      stream_id: ToolResultMessage["stream_id"];
       call_id: ToolResultMessage["call_id"];
       result: ToolResultMessage["result"];
+    }
+  | {
+      kind: "stream_end";
+      seq: StreamEndMessage["seq"];
+      stream_id: StreamEndMessage["stream_id"];
     };
