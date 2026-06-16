@@ -1,3 +1,4 @@
+import { Undo2 } from "lucide-react";
 import { cn } from "@alchemist-ai/ui/lib/utils";
 import type { Message } from "@/lib/chat-store";
 import { ToolCallCard } from "./tool-call-card";
@@ -46,12 +47,14 @@ export function ChatMessage({
           </div>
           {onRetry ? (
             <button
-              className="ml-auto block border px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Resume from this message"
+              className="ml-auto flex size-7 items-center justify-center border text-muted-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
               disabled={retryDisabled}
               onClick={onRetry}
+              title="Resume from this message"
               type="button"
             >
-              Resume from here
+              <Undo2 className="size-3.5" />
             </button>
           ) : null}
         </div>
