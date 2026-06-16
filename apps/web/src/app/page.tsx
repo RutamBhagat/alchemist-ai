@@ -92,6 +92,7 @@ export default function Home() {
           break;
         case "turn_interrupted":
           setAwaitingResponse(false);
+          autoResumeLastUserMessage();
           break;
         case "token":
           appendToken(event.data.text, event.data.target);
@@ -147,12 +148,12 @@ export default function Home() {
     element?.scrollIntoView({ block: "center", behavior: "smooth" });
   };
 
-  const sendToWorker = (content: string) => {
+  function sendToWorker(content: string) {
     setAwaitingResponse(true);
     worker.current?.postMessage({ type: "send", content });
-  };
+  }
 
-  const clearTrace = () => {
+  function clearTrace() {
     if (traceFlush.current !== null) {
       cancelAnimationFrame(traceFlush.current);
       traceFlush.current = null;
@@ -160,7 +161,25 @@ export default function Home() {
     pendingTraceEvents.current = [];
     setTraceEvents([]);
     setSelectedTraceTarget(null);
-  };
+  }
+
+  function autoResumeLastUserMessage() {
+    const state = useChatStore.getState();
+
+    for (let index = state.messages.length - 1; index >= 0; index--) {
+      const message = state.messages[index];
+      if (message?.role !== "user") continue;
+
+      const content = message.text.trim();
+      if (!content) return;
+
+      clearTrace();
+      state.retryFromUserMessage(index);
+      sendToWorker(content);
+      toast.info("Retrying the last message after stalled recovery.");
+      return;
+    }
+  }
 
   const submit = () => {
     const content = draft.trim();
