@@ -71,6 +71,8 @@ Every WebSocket message is a JSON object with a `type` field and a monotonically
 | `STREAM_END` | `seq`, `stream_id: string` | The agent has finished its response for this `stream_id`. |
 | `ERROR` | `seq`, `code: string`, `message: string` | A server-side error. May arrive at any point. |
 
+Implementation note: the frontend treats `stream_id` as the partition key for agent response state. Tokens, tool calls, tool results, and stream end events update only the addressed stream; they are not appended to the last rendered agent message.
+
 ### Sequence Number Rules
 
 1. Every server message has a `seq`. Sequence numbers are globally ordered and gapless in normal mode.
