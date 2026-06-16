@@ -221,7 +221,7 @@ export default function Home() {
 
   return (
     <SidebarProvider
-      defaultOpen
+      defaultOpen={false}
       style={{ "--sidebar-width": "30rem" } as CSSProperties}
     >
       <TraceSidebar
@@ -230,10 +230,14 @@ export default function Home() {
         selectedTarget={selectedTraceTarget}
       />
       <SidebarInset>
-        <main className="grid h-svh grid-cols-2 overflow-hidden">
+        <div className="h-svh min-w-0 overflow-hidden">
           <ConnectionPill status={connectionStatus} />
-          <SidebarTrigger className="fixed left-2 top-2 z-50" />
-          <section className="min-h-0 min-w-0 overflow-hidden">
+          <SidebarTrigger
+            aria-label="Toggle debug mode"
+            className="fixed left-2 top-2 z-50"
+            title="Toggle debug mode"
+          />
+          <section className="h-full min-h-0 min-w-0 overflow-hidden">
             <Card className="flex h-full w-full flex-col rounded-none border-0">
               <CardContent
                 className="min-h-0 flex-1 space-y-3 overflow-y-auto py-4"
@@ -307,13 +311,13 @@ export default function Home() {
               </CardFooter>
             </Card>
           </section>
-          <ContextSidebar
-            contexts={contexts}
-            onSelectContext={selectContext}
-            selectedContextId={selectedContextId}
-          />
-        </main>
+        </div>
       </SidebarInset>
+      <ContextSidebar
+        contexts={contexts}
+        onSelectContext={selectContext}
+        selectedContextId={selectedContextId}
+      />
     </SidebarProvider>
   );
 }
