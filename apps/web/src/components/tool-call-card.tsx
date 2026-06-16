@@ -1,6 +1,6 @@
 import JsonView from "@uiw/react-json-view";
 import { cn } from "@alchemist-ai/ui/lib/utils";
-import type { ToolCall } from "@/lib/chat-store";
+import type { ToolCall } from "@/lib/chat-stream-model";
 
 type ToolCallCardProps = {
   onSelect: () => void;
