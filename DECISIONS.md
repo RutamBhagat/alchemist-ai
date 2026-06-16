@@ -86,6 +86,8 @@ Context snapshots are stored by `context_id`. Every new snapshot is appended to 
 
 The context sidebar supports direct tree viewing and diff viewing between snapshots. The implementation delegates large JSON rendering and virtualized diff rendering to UI libraries instead of maintaining a custom JSON diff algorithm in application state. This keeps the protocol/client logic focused on snapshot collection, selection, and stable rendering.
 
+Testing note: because JSON diff rendering is delegated to `virtual-react-json-diff`, this codebase does not maintain a custom JSON diff function to unit-test. The meaningful local test surface is snapshot collection/history, context selection, and the component wiring to the delegated diff viewer; the third-party diff algorithm itself is intentionally not re-tested here.
+
 ## Layout and rendering stability
 
 The UI avoids layout churn during streaming by appending tokens into the last compatible text part instead of creating a new component for every token. Tool calls are rendered as stable cards keyed by `call_id`, and results patch those existing cards instead of inserting unrelated rows.
