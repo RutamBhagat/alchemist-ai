@@ -1,108 +1,178 @@
-import type { ContextSnapshotMessage } from "../../../agent-server/src/types";
+import type {
+  ContextSnapshotMessage,
+  StreamEndMessage,
+  TokenMessage,
+  ToolCallMessage,
+  ToolResultMessage,
+} from "../../../agent-server/src/types";
 import { create } from "zustand";
+import type {
+  AgentStream,
+  ChatStreamState,
+  ToolCall,
+} from "./chat-stream-model";
+import {
+  addToolCallToStream,
+  appendTokenToStream,
+  emptyChatStreamState,
+  endStreamById,
+  setToolResultForCall,
+} from "./chat-stream-model";
 
 export type ContextSnapshot = Pick<ContextSnapshotMessage, "context_id" | "data">;
 export type ContextSlot = {
   snapshots: ContextSnapshot[];
 };
 
-export type ToolCall = {
+export type UserMessage = {
   id: string;
-  tool_name: string;
-  args: Record<string, unknown>;
-  result?: Record<string, unknown>;
+  role: "user";
+  text: string;
 };
 
-export type MessagePart =
-  | { kind: "text"; target: string; text: string }
-  | { kind: "tool_call"; tool: ToolCall };
+export type ChatEntry =
+  | { kind: "user"; id: string }
+  | { kind: "agent_stream"; stream_id: string };
 
-export type Message =
-  | { role: "user"; text: string }
-  | { role: "agent"; parts: MessagePart[] };
-
-type ChatState = {
-  messages: Message[];
+type ChatState = ChatStreamState & {
+  entryOrder: ChatEntry[];
+  userMessagesById: Record<string, UserMessage>;
   contexts: Record<string, ContextSlot>;
   selectedContextId: string | null;
+  nextUserMessageId: number;
   addUserMessage: (text: string) => void;
-  retryFromUserMessage: (messageIndex: number) => void;
-  appendToken: (text: string, target: string) => void;
-  addToolCall: (tool: ToolCall) => void;
-  setToolResult: (callId: string, result: Record<string, unknown>) => void;
+  retryFromUserMessage: (entryIndex: number) => void;
+  appendToken: (event: TokenMessage & { target: string }) => void;
+  addToolCall: (event: ToolCallMessage) => void;
+  setToolResult: (event: ToolResultMessage) => void;
+  endStream: (event: StreamEndMessage) => void;
   setContext: (context: ContextSnapshot) => void;
   selectContext: (contextId: string) => void;
 };
 
+function appendStreamEntry(
+  state: ChatState,
+  next: ChatStreamState,
+  stream_id: string,
+): Pick<ChatState, "entryOrder" | "streamOrder" | "streamsById" | "toolsByCallId"> {
+  if (state.streamsById[stream_id]) {
+    return {
+      entryOrder: state.entryOrder,
+      streamOrder: next.streamOrder,
+      streamsById: next.streamsById,
+      toolsByCallId: next.toolsByCallId,
+    };
+  }
+
+  return {
+    entryOrder: [...state.entryOrder, { kind: "agent_stream", stream_id }],
+    streamOrder: next.streamOrder,
+    streamsById: next.streamsById,
+    toolsByCallId: next.toolsByCallId,
+  };
+}
+
+function retainEntriesThrough(
+  state: ChatState,
+  entryIndex: number,
+): Pick<
+  ChatState,
+  | "contexts"
+  | "entryOrder"
+  | "selectedContextId"
+  | "streamOrder"
+  | "streamsById"
+  | "toolsByCallId"
+  | "userMessagesById"
+> {
+  const entryOrder = state.entryOrder.slice(0, entryIndex + 1);
+  const retainedUserIds = new Set<string>();
+  const retainedStreamIds = new Set<string>();
+
+  for (const entry of entryOrder) {
+    if (entry.kind === "user") {
+      retainedUserIds.add(entry.id);
+    } else {
+      retainedStreamIds.add(entry.stream_id);
+    }
+  }
+
+  const userMessagesById: Record<string, UserMessage> = {};
+  for (const id of retainedUserIds) {
+    const message = state.userMessagesById[id];
+    if (message) {
+      userMessagesById[id] = message;
+    }
+  }
+
+  const streamsById: Record<string, AgentStream> = {};
+  for (const stream_id of retainedStreamIds) {
+    const stream = state.streamsById[stream_id];
+    if (stream) {
+      streamsById[stream_id] = stream;
+    }
+  }
+
+  const toolsByCallId: Record<string, ToolCall> = {};
+  for (const [call_id, tool] of Object.entries(state.toolsByCallId)) {
+    if (retainedStreamIds.has(tool.stream_id)) {
+      toolsByCallId[call_id] = tool;
+    }
+  }
+
+  return {
+    contexts: {},
+    entryOrder,
+    selectedContextId: null,
+    streamOrder: state.streamOrder.filter((stream_id) =>
+      retainedStreamIds.has(stream_id),
+    ),
+    streamsById,
+    toolsByCallId,
+    userMessagesById,
+  };
+}
+
 export const useChatStore = create<ChatState>((set) => ({
-  messages: [],
+  ...emptyChatStreamState(),
+  entryOrder: [],
+  userMessagesById: {},
   contexts: {},
   selectedContextId: null,
+  nextUserMessageId: 0,
   addUserMessage: (text) =>
-    set((state) => ({
-      messages: [...state.messages, { role: "user", text }, { role: "agent", parts: [] }],
-    })),
-  retryFromUserMessage: (messageIndex) =>
     set((state) => {
-      const message = state.messages[messageIndex];
-      if (message?.role !== "user") {
+      const nextUserMessageId = state.nextUserMessageId + 1;
+      const id = `user:${nextUserMessageId}`;
+
+      return {
+        entryOrder: [...state.entryOrder, { kind: "user", id }],
+        nextUserMessageId,
+        userMessagesById: {
+          ...state.userMessagesById,
+          [id]: { id, role: "user", text },
+        },
+      };
+    }),
+  retryFromUserMessage: (entryIndex) =>
+    set((state) => {
+      const entry = state.entryOrder[entryIndex];
+      if (entry?.kind !== "user") {
         return state;
       }
 
-      return {
-        contexts: {},
-        messages: [
-          ...state.messages.slice(0, messageIndex + 1),
-          { role: "agent", parts: [] },
-        ],
-        selectedContextId: null,
-      };
+      return retainEntriesThrough(state, entryIndex);
     }),
-  appendToken: (text, target) =>
-    set((state) => {
-      const messages = [...state.messages];
-      const last = messages.at(-1);
-      if (!last || last.role !== "agent") {
-        return state;
-      }
-      const parts = [...last.parts];
-      const previous = parts.at(-1);
-      if (previous?.kind === "text" && previous.target === target) {
-        parts[parts.length - 1] = { ...previous, text: previous.text + text };
-      } else {
-        parts.push({ kind: "text", target, text });
-      }
-      messages[messages.length - 1] = { ...last, parts };
-      return { messages };
-    }),
-  addToolCall: (tool) =>
-    set((state) => {
-      const messages = [...state.messages];
-      const last = messages.at(-1);
-      if (!last || last.role !== "agent") {
-        return state;
-      }
-      messages[messages.length - 1] = {
-        ...last,
-        parts: [...last.parts, { kind: "tool_call", tool }],
-      };
-      return { messages };
-    }),
-  setToolResult: (callId, result) =>
-    set((state) => ({
-      messages: state.messages.map((message) =>
-        message.role === "user"
-          ? message
-          : {
-              ...message,
-              parts: message.parts.map((part) =>
-                part.kind === "tool_call" && part.tool.id === callId
-                  ? { ...part, tool: { ...part.tool, result } }
-                  : part,
-              ),
-            },
-      ),
-    })),
+  appendToken: (event) =>
+    set((state) =>
+      appendStreamEntry(state, appendTokenToStream(state, event), event.stream_id),
+    ),
+  addToolCall: (event) =>
+    set((state) =>
+      appendStreamEntry(state, addToolCallToStream(state, event), event.stream_id),
+    ),
+  setToolResult: (event) => set((state) => setToolResultForCall(state, event)),
+  endStream: (event) => set((state) => endStreamById(state, event)),
   setContext: (context) =>
     set((state) => ({
       contexts: {
