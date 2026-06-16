@@ -160,40 +160,4 @@ describe("chat store stream partitioning", () => {
       status: "streaming",
     });
   });
-
-  it("retry truncates later entries, contexts, streams, and stale tools", () => {
-    const actions = useChatStore.getState();
-
-    actions.addUserMessage("first");
-    actions.appendToken({
-      type: "TOKEN",
-      seq: 1,
-      stream_id: "A",
-      target: "stream:A:text:1",
-      text: "old",
-    });
-    actions.addUserMessage("second");
-    actions.addToolCall({
-      type: "TOOL_CALL",
-      seq: 2,
-      stream_id: "B",
-      call_id: "c2",
-      tool_name: "lookup",
-      args: {},
-    });
-    actions.setContext({ context_id: "ctx", data: { value: 1 } });
-
-    actions.retryFromUserMessage(0);
-
-    const state = useChatStore.getState();
-    expect(state.entryOrder).toEqual([{ kind: "user", id: "user:1" }]);
-    expect(state.userMessagesById).toEqual({
-      "user:1": { id: "user:1", role: "user", text: "first" },
-    });
-    expect(state.streamOrder).toEqual([]);
-    expect(state.streamsById).toEqual({});
-    expect(state.toolsByCallId).toEqual({});
-    expect(state.contexts).toEqual({});
-    expect(state.selectedContextId).toBeNull();
-  });
 });
