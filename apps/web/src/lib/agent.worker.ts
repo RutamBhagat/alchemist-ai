@@ -1,7 +1,7 @@
 import { trace, traceOut } from "./agent-trace";
 import { serverMessageSchema } from "./protocol";
 import { createSequenceGate } from "./sequence-gate";
-import type { ServerMessage } from "../../../agent-server/src/types";
+import type { ServerMessage, TokenMessage } from "../../../agent-server/src/types";
 
 type UiToWorker = { type: "send"; content: string };
 type Timer = ReturnType<typeof setTimeout>;
@@ -14,8 +14,8 @@ type WorkerState = {
   reconnectTimer?: Timer;
   reconnectDelayMs: number;
   lastAppliedSeq: number;
-  textTarget: string | null;
-  textTargetId: number;
+  textTargetsByStreamId: Map<string, string>;
+  textTargetIdsByStreamId: Map<string, number>;
   userTarget: string | null;
   userTargetId: number;
   turnActive: boolean;
@@ -27,8 +27,8 @@ type WorkerState = {
 const state: WorkerState = {
   reconnectDelayMs: 500,
   lastAppliedSeq: 0,
-  textTarget: null,
-  textTargetId: 0,
+  textTargetsByStreamId: new Map(),
+  textTargetIdsByStreamId: new Map(),
   userTarget: null,
   userTargetId: 0,
   turnActive: false,
@@ -46,11 +46,8 @@ function markActive() {
   self.postMessage({ kind: "connection", status: "streaming" });
   clearTimeout(state.waitTimer);
   scheduleStreamIdleCheck();
-
   state.waitTimer = setTimeout(() => {
-    if (state.turnActive) {
-      self.postMessage({ kind: "connection", status: "waiting" });
-    }
+    if (state.turnActive) self.postMessage({ kind: "connection", status: "waiting" });
   }, LATENCY_SPIKE_AFTER_MS);
 }
 
@@ -77,9 +74,7 @@ function sendTurn(content: string) {
 }
 
 function resumeTurn() {
-  state.socket?.send(
-    JSON.stringify({ type: "RESUME", last_seq: state.lastAppliedSeq }),
-  );
+  state.socket?.send(JSON.stringify({ type: "RESUME", last_seq: state.lastAppliedSeq }));
   traceOut("RESUME", `last_seq ${state.lastAppliedSeq}`);
 }
 
@@ -97,12 +92,7 @@ function interruptTurn(message: string) {
   state.turnActive = false;
   clearResumeStallCheck();
   clearStreamIdleCheck();
-
-  self.postMessage({
-    kind: "notification",
-    type: "error",
-    message,
-  });
+  self.postMessage({ kind: "notification", type: "error", message });
   self.postMessage({ kind: "turn_interrupted" });
   markConnected();
 }
@@ -110,35 +100,42 @@ function interruptTurn(message: string) {
 function scheduleInterruptionCheck() {
   clearTimeout(state.resumeStallTimer);
   state.resumeStallTimer = setTimeout(() => {
-    if (!state.turnActive) {
-      return;
-    }
-    interruptTurn(
-      "Stream interrupted. The backend did not resume generation after reconnect.",
-    );
+    if (state.turnActive) interruptTurn("Stream interrupted during recovery.");
   }, RESUME_STALL_AFTER_MS);
 }
 
 function scheduleStreamIdleCheck() {
   clearTimeout(state.streamIdleTimer);
   state.streamIdleTimer = setTimeout(() => {
-    if (!state.turnActive) {
-      return;
-    }
-    interruptTurn(
-      "Stream stalled. The backend kept the socket open but did not send STREAM_END.",
-    );
+    if (state.turnActive) interruptTurn("Stream stalled without STREAM_END.");
   }, STREAM_IDLE_INTERRUPT_AFTER_MS);
 }
 
-function textTarget() {
-  state.textTarget ??= `text:${++state.textTargetId}`;
-  return state.textTarget;
+function textTarget(streamId: string) {
+  const existing = state.textTargetsByStreamId.get(streamId);
+  if (existing) return existing;
+
+  const nextId = (state.textTargetIdsByStreamId.get(streamId) ?? 0) + 1;
+  state.textTargetIdsByStreamId.set(streamId, nextId);
+
+  const target = `stream:${streamId}:text:${nextId}`;
+  state.textTargetsByStreamId.set(streamId, target);
+  return target;
 }
 
-function applyToken(text: string) {
-  const target = textTarget();
-  self.postMessage({ kind: "token", text, target });
+function clearTextTarget(streamId: string) {
+  state.textTargetsByStreamId.delete(streamId);
+}
+
+function applyToken(message: TokenMessage) {
+  const target = textTarget(message.stream_id);
+  self.postMessage({
+    kind: "token",
+    seq: message.seq,
+    stream_id: message.stream_id,
+    text: message.text,
+    target,
+  });
   return target;
 }
 
@@ -146,29 +143,29 @@ function applyMessage(message: ServerMessage) {
   switch (message.type) {
     case "TOKEN":
       markActive();
-      return applyToken(message.text);
+      return applyToken(message);
     case "CONTEXT_SNAPSHOT":
       markActive();
-      self.postMessage({
-        kind: "context",
-        context_id: message.context_id,
-        data: message.data,
-      });
+      self.postMessage({ kind: "context", context_id: message.context_id, data: message.data });
       break;
     case "TOOL_CALL":
       markActive();
       self.postMessage({
         kind: "tool_call",
+        seq: message.seq,
+        stream_id: message.stream_id,
         call_id: message.call_id,
         tool_name: message.tool_name,
         args: message.args,
       });
-      state.textTarget = null;
+      clearTextTarget(message.stream_id);
       break;
     case "TOOL_RESULT":
       markActive();
       self.postMessage({
         kind: "tool_result",
+        seq: message.seq,
+        stream_id: message.stream_id,
         call_id: message.call_id,
         result: message.result,
       });
@@ -176,17 +173,15 @@ function applyMessage(message: ServerMessage) {
     case "PING":
       break;
     case "STREAM_END":
+      self.postMessage({ kind: "stream_end", seq: message.seq, stream_id: message.stream_id });
+      clearTextTarget(message.stream_id);
       state.turnActive = false;
       clearResumeStallCheck();
       clearStreamIdleCheck();
       markConnected();
       break;
     case "ERROR":
-      self.postMessage({
-        kind: "notification",
-        type: "error",
-        message: message.message,
-      });
+      self.postMessage({ kind: "notification", type: "error", message: message.message });
       break;
   }
 }
@@ -208,10 +203,9 @@ function connect(resume: boolean) {
   self.postMessage({ kind: "connection", status: "connecting" });
   const currentSocket = new WebSocket("ws://localhost:4747/ws");
   state.socket = currentSocket;
+
   currentSocket.onopen = () => {
-    if (state.socket !== currentSocket) {
-      return;
-    }
+    if (state.socket !== currentSocket) return;
     markConnected();
     if (resume) {
       resumeTurn();
@@ -219,69 +213,41 @@ function connect(resume: boolean) {
       return;
     }
     const queued = state.queued;
-    if (!queued) {
-      return;
-    }
+    if (!queued) return;
     sendTurn(queued);
     state.queued = undefined;
   };
 
   function disconnected() {
-    if (state.socket !== currentSocket) {
-      return;
-    }
+    if (state.socket !== currentSocket) return;
     currentSocket.onclose = null;
     currentSocket.onerror = null;
     clearTimeout(state.waitTimer);
     clearResumeStallCheck();
     clearStreamIdleCheck();
-    if (state.turnActive) {
-      scheduleReconnect();
-    } else {
-      self.postMessage({ kind: "connection", status: "disconnected" });
-    }
-    self.postMessage({
-      kind: "notification",
-      type: "error",
-      message:
-        "Connection lost. Reconnecting and replaying already-generated events; this mock backend may not continue an interrupted stream.",
-    });
+    if (state.turnActive) scheduleReconnect();
+    else self.postMessage({ kind: "connection", status: "disconnected" });
+    self.postMessage({ kind: "notification", type: "error", message: "Connection lost." });
   }
 
-  currentSocket.onclose = () => {
-    disconnected();
-  };
-  currentSocket.onerror = () => {
-    disconnected();
-  };
+  currentSocket.onclose = disconnected;
+  currentSocket.onerror = disconnected;
   currentSocket.onmessage = (event: MessageEvent<string>) => {
-    if (state.socket !== currentSocket) {
-      return;
-    }
+    if (state.socket !== currentSocket) return;
     const receivedAt = performance.now();
     const message = parseServerMessage(event.data);
-    if (!message) {
-      return;
-    }
+    if (!message) return;
 
-    // Heartbeats are liveness checks, so PING must be answered immediately.
-    // If we wait for seq-order processing/replay buffering, an out-of-order PING can sit behind missing messages long enough for the server to drop us.
     if (message.type === "PING" && !state.answeredPingSeqs.has(message.seq)) {
       state.answeredPingSeqs.add(message.seq);
       trace(message, receivedAt);
-      currentSocket.send(
-        JSON.stringify({ type: "PONG", echo: message.challenge }),
-      );
+      currentSocket.send(JSON.stringify({ type: "PONG", echo: message.challenge }));
       traceOut("PONG", `echo ${message.challenge || "(empty)"}`);
     }
-    if (
-      message.type === "TOOL_CALL" &&
-      !state.ackedToolCalls.has(message.call_id)
-    ) {
+
+    if (message.type === "TOOL_CALL" && !state.ackedToolCalls.has(message.call_id)) {
       state.ackedToolCalls.add(message.call_id);
-      currentSocket.send(
-        JSON.stringify({ type: "TOOL_ACK", call_id: message.call_id }),
-      );
+      currentSocket.send(JSON.stringify({ type: "TOOL_ACK", call_id: message.call_id }));
       traceOut("TOOL_ACK", message.call_id, message.call_id);
     }
 
@@ -310,10 +276,7 @@ function scheduleReconnect() {
     () => connect(state.queued === undefined),
     state.reconnectDelayMs,
   );
-  state.reconnectDelayMs = Math.min(
-    state.reconnectDelayMs * 2,
-    MAX_RECONNECT_AFTER_MS,
-  );
+  state.reconnectDelayMs = Math.min(state.reconnectDelayMs * 2, MAX_RECONNECT_AFTER_MS);
 }
 
 function startTurn() {
@@ -324,7 +287,8 @@ function startTurn() {
   state.answeredPingSeqs.clear();
   state.reconnectDelayMs = 500;
   state.lastAppliedSeq = 0;
-  state.textTarget = null;
+  state.textTargetsByStreamId.clear();
+  state.textTargetIdsByStreamId.clear();
   state.userTarget = `user:${++state.userTargetId}`;
   state.turnActive = true;
 }
@@ -338,14 +302,10 @@ function sendUserMessage(content: string) {
   }
 
   state.queued = content;
-  if (state.socket?.readyState === WebSocket.CONNECTING) {
-    return;
-  }
+  if (state.socket?.readyState === WebSocket.CONNECTING) return;
   connect(false);
 }
 
 self.onmessage = (event: MessageEvent<UiToWorker>) => {
-  if (event.data.type === "send") {
-    sendUserMessage(event.data.content);
-  }
+  if (event.data.type === "send") sendUserMessage(event.data.content);
 };
