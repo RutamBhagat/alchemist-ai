@@ -28,6 +28,29 @@ describe("createSequenceGate", () => {
     expect(gate.accept(token(1))).toEqual([]);
   });
 
+  it("delivers a fully reversed sequence after the first missing seq arrives", () => {
+    const gate = createSequenceGate();
+    gate.startTurn();
+
+    for (const seq of [5, 4, 3, 2]) {
+      expect(gate.accept(token(seq))).toEqual([]);
+    }
+
+    expect(gate.accept(token(1)).map((message) => message.seq)).toEqual([
+      1, 2, 3, 4, 5,
+    ]);
+  });
+
+  it("emits nothing for an empty reset buffer and then accepts the next first seq", () => {
+    const gate = createSequenceGate();
+    gate.startTurn();
+
+    expect(gate.accept({ type: "PING", seq: 0, challenge: "reset" })).toEqual(
+      [],
+    );
+    expect(gate.accept(token(1)).map((message) => message.seq)).toEqual([1]);
+  });
+
   it("starts a new turn by clearing processed and pending state", () => {
     const gate = createSequenceGate();
     gate.startTurn();
