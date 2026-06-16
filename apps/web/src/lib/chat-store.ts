@@ -26,6 +26,7 @@ type ChatState = {
   contexts: Record<string, ContextSlot>;
   selectedContextId: string | null;
   addUserMessage: (text: string) => void;
+  retryFromUserMessage: (messageIndex: number) => void;
   appendToken: (text: string, target: string) => void;
   addToolCall: (tool: ToolCall) => void;
   setToolResult: (callId: string, result: Record<string, unknown>) => void;
@@ -41,6 +42,22 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) => ({
       messages: [...state.messages, { role: "user", text }, { role: "agent", parts: [] }],
     })),
+  retryFromUserMessage: (messageIndex) =>
+    set((state) => {
+      const message = state.messages[messageIndex];
+      if (message?.role !== "user") {
+        return state;
+      }
+
+      return {
+        contexts: {},
+        messages: [
+          ...state.messages.slice(0, messageIndex + 1),
+          { role: "agent", parts: [] },
+        ],
+        selectedContextId: null,
+      };
+    }),
   appendToken: (text, target) =>
     set((state) => {
       const messages = [...state.messages];
