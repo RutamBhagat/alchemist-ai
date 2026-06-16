@@ -6,14 +6,18 @@ type ChatMessageProps = {
   onSelectText: (target: string) => void;
   message: Message;
   onSelectTool: (callId: string) => void;
+  onRetry?: () => void;
+  retryDisabled?: boolean;
   selectedTarget: string | null;
   userTarget: string | null;
 };
 
 export function ChatMessage({
   message,
+  onRetry,
   onSelectText,
   onSelectTool,
+  retryDisabled = false,
   selectedTarget,
   userTarget,
 }: ChatMessageProps) {
@@ -24,20 +28,32 @@ export function ChatMessage({
       )}
     >
       {message.role === "user" ? (
-        <div
-          className={cn(
-            "cursor-pointer whitespace-pre-wrap border bg-black p-3 text-sm leading-6 text-white",
-            selectedTarget === userTarget && "border-blue-500 ring-2 ring-blue-200",
-          )}
-          data-chat-target={userTarget ?? undefined}
-          onClick={() => userTarget && onSelectText(userTarget)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && userTarget) onSelectText(userTarget);
-          }}
-          role="button"
-          tabIndex={0}
-        >
-          {message.text}
+        <div className="space-y-1">
+          <div
+            className={cn(
+              "cursor-pointer whitespace-pre-wrap border bg-black p-3 text-sm leading-6 text-white",
+              selectedTarget === userTarget && "border-blue-500 ring-2 ring-blue-200",
+            )}
+            data-chat-target={userTarget ?? undefined}
+            onClick={() => userTarget && onSelectText(userTarget)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && userTarget) onSelectText(userTarget);
+            }}
+            role="button"
+            tabIndex={0}
+          >
+            {message.text}
+          </div>
+          {onRetry ? (
+            <button
+              className="ml-auto block border px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={retryDisabled}
+              onClick={onRetry}
+              type="button"
+            >
+              Resume from here
+            </button>
+          ) : null}
         </div>
       ) : (
         <div className="space-y-2">
