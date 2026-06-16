@@ -87,6 +87,9 @@ export default function Home() {
         case "notification":
           toast.error(event.data.message);
           break;
+        case "turn_interrupted":
+          setAwaitingResponse(false);
+          break;
         case "token":
           appendToken(event.data.text, event.data.target);
           break;

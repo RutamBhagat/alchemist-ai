@@ -9,21 +9,15 @@ type WorkerState = {
   socket?: WebSocket;
   queued?: string;
   waitTimer?: Timer;
-  idleTimer?: Timer;
-  resumeTimer?: Timer;
+  resumeStallTimer?: Timer;
+  streamIdleTimer?: Timer;
   reconnectTimer?: Timer;
-  restartTimer?: Timer;
   reconnectDelayMs: number;
   lastAppliedSeq: number;
-  lastUserMessage?: string;
-  renderedText: string;
   textTarget: string | null;
   textTargetId: number;
   userTarget: string | null;
   userTargetId: number;
-  restartSkipText: string;
-  restartSuppressToolEvents: boolean;
-  streamEndSeq: number | null;
   turnActive: boolean;
   ackedToolCalls: Set<string>;
   answeredPingSeqs: Set<number>;
@@ -33,14 +27,10 @@ type WorkerState = {
 const state: WorkerState = {
   reconnectDelayMs: 500,
   lastAppliedSeq: 0,
-  renderedText: "",
   textTarget: null,
   textTargetId: 0,
   userTarget: null,
   userTargetId: 0,
-  restartSkipText: "",
-  restartSuppressToolEvents: false,
-  streamEndSeq: null,
   turnActive: false,
   ackedToolCalls: new Set(),
   answeredPingSeqs: new Set(),
@@ -48,48 +38,25 @@ const state: WorkerState = {
 };
 
 const LATENCY_SPIKE_AFTER_MS = 2000;
+const RESUME_STALL_AFTER_MS = 4000;
+const STREAM_IDLE_INTERRUPT_AFTER_MS = 12000;
 const MAX_RECONNECT_AFTER_MS = 10000;
-const RESUME_WHEN_STALLED_MS = 1500;
-const MISSING_STREAM_END_AFTER_MS = 8000;
-const RESTART_AFTER_RESUME_STALL_MS = 3500;
 
 function markActive() {
   self.postMessage({ kind: "connection", status: "streaming" });
   clearTimeout(state.waitTimer);
-  clearTimeout(state.idleTimer);
-  // Chaos latency spikes pause delivery for at least 2s. This is only a stalled-stream hint; real disconnects come from WebSocket close/error.
-  state.waitTimer = setTimeout(
-    () => self.postMessage({ kind: "connection", status: "waiting" }),
-    LATENCY_SPIKE_AFTER_MS,
-  );
-  state.idleTimer = setTimeout(markConnected, MISSING_STREAM_END_AFTER_MS);
-}
+  scheduleStreamIdleCheck();
 
-function scheduleResume() {
-  if (!state.turnActive || state.streamEndSeq !== null) {
-    return;
-  }
-  clearTimeout(state.resumeTimer);
-  state.resumeTimer = setTimeout(() => {
-    if (!state.turnActive || state.streamEndSeq !== null) {
-      return;
+  state.waitTimer = setTimeout(() => {
+    if (state.turnActive) {
+      self.postMessage({ kind: "connection", status: "waiting" });
     }
-    if (state.socket?.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    state.socket.send(
-      JSON.stringify({ type: "RESUME", last_seq: state.lastAppliedSeq }),
-    );
-    scheduleResume();
-  }, RESUME_WHEN_STALLED_MS);
+  }, LATENCY_SPIKE_AFTER_MS);
 }
 
 function markConnected() {
   clearTimeout(state.waitTimer);
-  clearTimeout(state.idleTimer);
-  clearTimeout(state.resumeTimer);
   clearTimeout(state.reconnectTimer);
-  clearTimeout(state.restartTimer);
   state.reconnectDelayMs = 500;
   self.postMessage({ kind: "connection", status: "connected" });
 }
@@ -106,7 +73,7 @@ function parseServerMessage(data: string): ServerMessage | null {
 function sendTurn(content: string) {
   state.socket?.send(JSON.stringify({ type: "USER_MESSAGE", content }));
   traceOut("USER_MESSAGE", content, undefined, state.userTarget ?? undefined);
-  scheduleResume();
+  scheduleStreamIdleCheck();
 }
 
 function resumeTurn() {
@@ -114,32 +81,54 @@ function resumeTurn() {
     JSON.stringify({ type: "RESUME", last_seq: state.lastAppliedSeq }),
   );
   traceOut("RESUME", `last_seq ${state.lastAppliedSeq}`);
-  scheduleResume();
 }
 
-function scheduleRestartAfterResumeStall() {
-  clearTimeout(state.restartTimer);
-  state.restartTimer = setTimeout(() => {
-    if (!state.turnActive || state.streamEndSeq !== null) {
+function clearResumeStallCheck() {
+  clearTimeout(state.resumeStallTimer);
+  state.resumeStallTimer = undefined;
+}
+
+function clearStreamIdleCheck() {
+  clearTimeout(state.streamIdleTimer);
+  state.streamIdleTimer = undefined;
+}
+
+function interruptTurn(message: string) {
+  state.turnActive = false;
+  clearResumeStallCheck();
+  clearStreamIdleCheck();
+
+  self.postMessage({
+    kind: "notification",
+    type: "error",
+    message,
+  });
+  self.postMessage({ kind: "turn_interrupted" });
+  markConnected();
+}
+
+function scheduleInterruptionCheck() {
+  clearTimeout(state.resumeStallTimer);
+  state.resumeStallTimer = setTimeout(() => {
+    if (!state.turnActive) {
       return;
     }
-    if (!state.lastUserMessage || state.socket?.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    state.sequenceGate.startTurn();
-    state.ackedToolCalls.clear();
-    state.answeredPingSeqs.clear();
-    clearTimeout(state.resumeTimer);
-    state.lastAppliedSeq = 0;
-    state.streamEndSeq = null;
-    state.restartSkipText = state.renderedText;
-    state.restartSuppressToolEvents = true;
-    state.socket.send(
-      JSON.stringify({ type: "USER_MESSAGE", content: state.lastUserMessage }),
+    interruptTurn(
+      "Stream interrupted. The backend did not resume generation after reconnect.",
     );
-    traceOut("USER_MESSAGE", "restart after stalled resume");
-    scheduleResume();
-  }, RESTART_AFTER_RESUME_STALL_MS);
+  }, RESUME_STALL_AFTER_MS);
+}
+
+function scheduleStreamIdleCheck() {
+  clearTimeout(state.streamIdleTimer);
+  state.streamIdleTimer = setTimeout(() => {
+    if (!state.turnActive) {
+      return;
+    }
+    interruptTurn(
+      "Stream stalled. The backend kept the socket open but did not send STREAM_END.",
+    );
+  }, STREAM_IDLE_INTERRUPT_AFTER_MS);
 }
 
 function textTarget() {
@@ -148,35 +137,6 @@ function textTarget() {
 }
 
 function applyToken(text: string) {
-  if (!state.restartSkipText) {
-    state.restartSuppressToolEvents = false;
-    state.renderedText += text;
-    const target = textTarget();
-    self.postMessage({ kind: "token", text, target });
-    return target;
-  }
-
-  if (state.restartSkipText.startsWith(text)) {
-    state.restartSkipText = state.restartSkipText.slice(text.length);
-    return null;
-  }
-
-  if (text.startsWith(state.restartSkipText)) {
-    const newText = text.slice(state.restartSkipText.length);
-    state.restartSkipText = "";
-    state.renderedText += newText;
-    if (newText) {
-      state.restartSuppressToolEvents = false;
-      const target = textTarget();
-      self.postMessage({ kind: "token", text: newText, target });
-      return target;
-    }
-    return null;
-  }
-
-  state.restartSkipText = "";
-  state.restartSuppressToolEvents = false;
-  state.renderedText += text;
   const target = textTarget();
   self.postMessage({ kind: "token", text, target });
   return target;
@@ -197,9 +157,6 @@ function applyMessage(message: ServerMessage) {
       break;
     case "TOOL_CALL":
       markActive();
-      if (state.restartSkipText || state.restartSuppressToolEvents) {
-        break;
-      }
       self.postMessage({
         kind: "tool_call",
         call_id: message.call_id,
@@ -210,9 +167,6 @@ function applyMessage(message: ServerMessage) {
       break;
     case "TOOL_RESULT":
       markActive();
-      if (state.restartSkipText || state.restartSuppressToolEvents) {
-        break;
-      }
       self.postMessage({
         kind: "tool_result",
         call_id: message.call_id,
@@ -223,8 +177,8 @@ function applyMessage(message: ServerMessage) {
       break;
     case "STREAM_END":
       state.turnActive = false;
-      state.restartSkipText = "";
-      state.restartSuppressToolEvents = false;
+      clearResumeStallCheck();
+      clearStreamIdleCheck();
       markConnected();
       break;
     case "ERROR":
@@ -261,7 +215,7 @@ function connect(resume: boolean) {
     markConnected();
     if (resume) {
       resumeTurn();
-      scheduleRestartAfterResumeStall();
+      scheduleInterruptionCheck();
       return;
     }
     const queued = state.queued;
@@ -279,9 +233,8 @@ function connect(resume: boolean) {
     currentSocket.onclose = null;
     currentSocket.onerror = null;
     clearTimeout(state.waitTimer);
-    clearTimeout(state.idleTimer);
-    clearTimeout(state.resumeTimer);
-    clearTimeout(state.restartTimer);
+    clearResumeStallCheck();
+    clearStreamIdleCheck();
     if (state.turnActive) {
       scheduleReconnect();
     } else {
@@ -290,7 +243,8 @@ function connect(resume: boolean) {
     self.postMessage({
       kind: "notification",
       type: "error",
-      message: "Server disconnected",
+      message:
+        "Connection lost. Reconnecting and replaying already-generated events; this mock backend may not continue an interrupted stream.",
     });
   }
 
@@ -308,14 +262,6 @@ function connect(resume: boolean) {
     const message = parseServerMessage(event.data);
     if (!message) {
       return;
-    }
-
-    if (message.type === "STREAM_END") {
-      state.streamEndSeq = message.seq;
-      clearTimeout(state.resumeTimer);
-      if (message.seq > state.lastAppliedSeq + 1) {
-        resumeTurn();
-      }
     }
 
     // Heartbeats are liveness checks, so PING must be answered immediately.
@@ -349,12 +295,9 @@ function connect(resume: boolean) {
       }
       if (orderedMessage.type !== "PING") {
         state.lastAppliedSeq = orderedMessage.seq;
-      }
-      if (
-        orderedMessage.type !== "PING" &&
-        orderedMessage.type !== "STREAM_END"
-      ) {
-        scheduleResume();
+        if (orderedMessage.type !== "STREAM_END" && state.resumeStallTimer) {
+          scheduleInterruptionCheck();
+        }
       }
     }
   };
@@ -362,7 +305,6 @@ function connect(resume: boolean) {
 
 function scheduleReconnect() {
   clearTimeout(state.reconnectTimer);
-  clearTimeout(state.restartTimer);
   self.postMessage({ kind: "connection", status: "reconnecting" });
   state.reconnectTimer = setTimeout(
     () => connect(state.queued === undefined),
@@ -375,24 +317,20 @@ function scheduleReconnect() {
 }
 
 function startTurn() {
+  clearResumeStallCheck();
+  clearStreamIdleCheck();
   state.sequenceGate.startTurn();
   state.ackedToolCalls.clear();
   state.answeredPingSeqs.clear();
   state.reconnectDelayMs = 500;
   state.lastAppliedSeq = 0;
-  state.renderedText = "";
   state.textTarget = null;
   state.userTarget = `user:${++state.userTargetId}`;
-  state.restartSkipText = "";
-  state.restartSuppressToolEvents = false;
-  state.streamEndSeq = null;
   state.turnActive = true;
 }
 
 function sendUserMessage(content: string) {
   clearTimeout(state.reconnectTimer);
-  clearTimeout(state.restartTimer);
-  state.lastUserMessage = content;
   startTurn();
   if (state.socket?.readyState === WebSocket.OPEN) {
     sendTurn(content);

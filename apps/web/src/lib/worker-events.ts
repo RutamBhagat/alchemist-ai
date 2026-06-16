@@ -18,6 +18,7 @@ export type ConnectionStatus =
 export type WorkerEvent =
   | (ScriptTokenEvent & { target: string })
   | ScriptContextEvent
+  | { kind: "turn_interrupted" }
   | { kind: "notification"; type: "error"; message: string }
   | { kind: "connection"; status: ConnectionStatus }
   | {
