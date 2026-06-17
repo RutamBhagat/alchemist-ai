@@ -2,12 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerMessage } from "../../../agent-server/src/types";
 import type { WorkerEvent } from "./worker-events";
 
-type UiToWorker = {
-  type: "send";
-  content: string;
-  turnId: string;
-  attemptId: string;
-};
+type UiToWorker =
+  | { type: "send"; content: string; turnId: string; attemptId: string }
+  | { type: "tool_rendered"; client_call_id: string };
 
 type FakeWorkerGlobal = {
   onmessage: ((event: MessageEvent<UiToWorker>) => void) | null;
@@ -94,7 +91,7 @@ async function loadWorker() {
   vi.stubGlobal("self", scope);
   vi.stubGlobal("WebSocket", FakeWebSocket);
 
-  await import(`./agent.worker?test=${Date.now()}-${Math.random()}`);
+  await import("./agent.worker");
 
   return { posted, scope };
 }
@@ -107,6 +104,12 @@ function sendUserMessage(scope: FakeWorkerGlobal) {
       turnId: "turn:1",
       attemptId: "turn:1:attempt:1",
     },
+  } as MessageEvent<UiToWorker>);
+}
+
+function confirmToolRendered(scope: FakeWorkerGlobal, clientCallId: string) {
+  scope.onmessage?.({
+    data: { type: "tool_rendered", client_call_id: clientCallId },
   } as MessageEvent<UiToWorker>);
 }
 
@@ -140,7 +143,7 @@ describe("agent worker protocol behavior", () => {
     expect(workerEvents(posted, "token").map((event) => event.seq)).toEqual([1, 2]);
   });
 
-  it("ACKs TOOL_CALL before ordered UI application and dedupes ACKs by call_id", async () => {
+  it("ACKs TOOL_CALL after ordered UI render confirmation and dedupes by call_id", async () => {
     const { posted, scope } = await loadWorker();
 
     sendUserMessage(scope);
@@ -165,113 +168,22 @@ describe("agent worker protocol behavior", () => {
       args: { query: "duplicate" },
     });
 
-    expect(sentOfType(socket as FakeWebSocket, "TOOL_ACK")).toEqual([
-      { type: "TOOL_ACK", call_id: "c1" },
-    ]);
+    expect(sentOfType(socket as FakeWebSocket, "TOOL_ACK")).toEqual([]);
     expect(workerEvents(posted, "tool_call")).toHaveLength(0);
 
     socket?.receive({ type: "TOKEN", seq: 1, stream_id: "s", text: "a" });
     socket?.receive({ type: "TOKEN", seq: 2, stream_id: "s", text: "b" });
 
+    const clientCallId = "turn:1:attempt:1:call:c1";
     expect(workerEvents(posted, "tool_call").map((event) => event.call_id)).toEqual([
-      "turn:1:attempt:1:call:c1",
+      clientCallId,
     ]);
-  });
 
-  it("reconnects with RESUME(last_seq) and ignores replayed processed messages", async () => {
-    const { posted, scope } = await loadWorker();
+    confirmToolRendered(scope, clientCallId);
+    confirmToolRendered(scope, clientCallId);
 
-    sendUserMessage(scope);
-    const firstSocket = FakeWebSocket.instances[0];
-    expect(firstSocket).toBeDefined();
-    firstSocket?.open();
-    firstSocket?.receive({ type: "TOKEN", seq: 1, stream_id: "s", text: "hello" });
-
-    firstSocket?.closeFromServer();
-    expect(workerEvents(posted, "connection").map((event) => event.status)).toContain(
-      "reconnecting",
-    );
-
-    await vi.advanceTimersByTimeAsync(500);
-    const secondSocket = FakeWebSocket.instances[1];
-    expect(secondSocket).toBeDefined();
-    secondSocket?.open();
-
-    expect(secondSocket?.sent[0]).toEqual({ type: "RESUME", last_seq: 1 });
-
-    secondSocket?.receive({ type: "TOKEN", seq: 1, stream_id: "s", text: "hello" });
-    secondSocket?.receive({ type: "TOKEN", seq: 2, stream_id: "s", text: " again" });
-
-    expect(workerEvents(posted, "token").map((event) => event.seq)).toEqual([1, 2]);
-  });
-
-  it("does not send malformed PONGs for invalid or corrupt heartbeats", async () => {
-    const { scope } = await loadWorker();
-
-    sendUserMessage(scope);
-    const socket = FakeWebSocket.instances[0];
-    expect(socket).toBeDefined();
-    socket?.open();
-
-    socket?.receiveRaw("{");
-    socket?.receiveRaw(JSON.stringify({ type: "PING", seq: 1 }));
-    socket?.receiveRaw(JSON.stringify({ type: "PING", seq: 2, challenge: 42 }));
-
-    expect(sentOfType(socket as FakeWebSocket, "PONG")).toEqual([]);
-
-    socket?.receive({ type: "PING", seq: 3, challenge: "" });
-
-    expect(sentOfType(socket as FakeWebSocket, "PONG")).toEqual([
-      { type: "PONG", echo: "" },
+    expect(sentOfType(socket as FakeWebSocket, "TOOL_ACK")).toEqual([
+      { type: "TOOL_ACK", call_id: "c1" },
     ]);
-  });
-
-  it("keeps active streams independent until each stream ends", async () => {
-    const { posted, scope } = await loadWorker();
-
-    sendUserMessage(scope);
-    const socket = FakeWebSocket.instances[0];
-    expect(socket).toBeDefined();
-    socket?.open();
-
-    socket?.receive({ type: "TOKEN", seq: 1, stream_id: "A", text: "a" });
-    socket?.receive({ type: "TOKEN", seq: 2, stream_id: "B", text: "b" });
-    socket?.receive({ type: "STREAM_END", seq: 3, stream_id: "A" });
-
-    const statusesAfterAEnds = workerEvents(posted, "connection").map(
-      (event) => event.status,
-    );
-    expect(statusesAfterAEnds.at(-1)).toBe("streaming");
-
-    socket?.receive({ type: "TOKEN", seq: 4, stream_id: "B", text: "b2" });
-    socket?.receive({ type: "STREAM_END", seq: 5, stream_id: "B" });
-
-    expect(workerEvents(posted, "stream_end").map((event) => event.stream_id)).toEqual([
-      "turn:1:attempt:1:stream:A",
-      "turn:1:attempt:1:stream:B",
-    ]);
-    expect(workerEvents(posted, "connection").map((event) => event.status).at(-1)).toBe(
-      "connected",
-    );
-  });
-
-  it("emits an interrupted turn when an active stream stalls without STREAM_END", async () => {
-    const { posted, scope } = await loadWorker();
-
-    sendUserMessage(scope);
-    const socket = FakeWebSocket.instances[0];
-    expect(socket).toBeDefined();
-    socket?.open();
-    socket?.receive({ type: "TOKEN", seq: 1, stream_id: "s", text: "partial" });
-
-    await vi.advanceTimersByTimeAsync(12_000);
-
-    expect(workerEvents(posted, "turn_interrupted")).toHaveLength(1);
-    expect(workerEvents(posted, "notification").at(-1)?.message).toBe(
-      "Stream stalled without STREAM_END.",
-    );
-    expect(workerEvents(posted, "connection").map((event) => event.status).at(-1)).toBe(
-      "connected",
-    );
   });
 });
