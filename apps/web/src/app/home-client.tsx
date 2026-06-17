@@ -25,7 +25,7 @@ import { useEffect, useRef, useState } from "react";
 
 type TraceEvent = Extract<WorkerEvent, { kind: "trace" }>;
 
-export default function HomeClient() {
+function AgentConsoleClient() {
   const [draft, setDraft] = useState("");
   const [autoScroll] = useState(process.env.NODE_ENV === "development");
   const [connectionStatus, setConnectionStatus] =
@@ -39,6 +39,7 @@ export default function HomeClient() {
   const pendingTraceEvents = useRef<TraceEvent[]>([]);
   const traceFlush = useRef<number | null>(null);
   const worker = useRef<Worker | null>(null);
+  const renderedToolCallIds = useRef<Set<string>>(new Set());
   const attemptsByTurnId = useRef<Record<string, number>>({});
   const localTraceId = useRef(0);
   const entryOrder = useChatStore((state) => state.entryOrder);
@@ -142,6 +143,17 @@ export default function HomeClient() {
       worker.current?.terminate();
     };
   }, [addToolCall, appendToken, endStream, setContext, setToolResult]);
+
+  useEffect(() => {
+    for (const tool of Object.values(toolsByCallId)) {
+      if (renderedToolCallIds.current.has(tool.call_id)) continue;
+      renderedToolCallIds.current.add(tool.call_id);
+      worker.current?.postMessage({
+        type: "tool_rendered",
+        client_call_id: tool.call_id,
+      });
+    }
+  }, [toolsByCallId]);
 
   useEffect(() => {
     if (!autoScroll) return;
@@ -325,3 +337,5 @@ export default function HomeClient() {
     </SidebarProvider>
   );
 }
+
+export default AgentConsoleClient;
