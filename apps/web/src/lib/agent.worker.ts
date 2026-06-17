@@ -4,12 +4,17 @@ import { createSequenceGate } from "./sequence-gate";
 import type { ServerMessage, TokenMessage } from "../../../agent-server/src/types";
 import type { AttemptId, TurnId } from "./worker-events";
 
-type UiToWorker = {
-  type: "send";
-  content: string;
-  turnId: TurnId;
-  attemptId: AttemptId;
-};
+type UiToWorker =
+  | {
+      type: "send";
+      content: string;
+      turnId: TurnId;
+      attemptId: AttemptId;
+    }
+  | {
+      type: "tool_rendered";
+      client_call_id: string;
+    };
 type QueuedTurn = { content: string; turnId: TurnId; attemptId: AttemptId };
 type Timer = ReturnType<typeof setTimeout>;
 type WorkerState = {
@@ -29,6 +34,7 @@ type WorkerState = {
   userTarget: string | null;
   turnActive: boolean;
   ackedToolCalls: Set<string>;
+  renderedToolCallsAwaitingAck: Map<string, string>;
   answeredPingSeqs: Set<number>;
   sequenceGate: ReturnType<typeof createSequenceGate>;
 };
@@ -44,6 +50,7 @@ const state: WorkerState = {
   userTarget: null,
   turnActive: false,
   ackedToolCalls: new Set(),
+  renderedToolCallsAwaitingAck: new Map(),
   answeredPingSeqs: new Set(),
   sequenceGate: createSequenceGate(),
 };
@@ -71,6 +78,12 @@ function clientStreamId(streamId: string) {
 
 function clientCallId(callId: string) {
   return attemptScopedId("call", callId);
+}
+
+function serverCallIdFromClientCallId(callId: string) {
+  const marker = ":call:";
+  const markerIndex = callId.lastIndexOf(marker);
+  return markerIndex === -1 ? callId : callId.slice(markerIndex + marker.length);
 }
 
 function traceIdentity(message: ServerMessage, target?: string) {
@@ -115,6 +128,31 @@ function sendTurn(content: string) {
 function resumeTurn() {
   state.socket?.send(JSON.stringify({ type: "RESUME", last_seq: state.lastAppliedSeq }));
   traceOut("RESUME", `last_seq ${state.lastAppliedSeq}`, activeIdentity());
+}
+
+function sendToolAck(serverCallId: string, renderedClientCallId: string) {
+  if (state.ackedToolCalls.has(serverCallId)) return;
+
+  if (state.socket?.readyState !== WebSocket.OPEN) {
+    state.renderedToolCallsAwaitingAck.set(serverCallId, renderedClientCallId);
+    return;
+  }
+
+  state.socket.send(JSON.stringify({ type: "TOOL_ACK", call_id: serverCallId }));
+  state.ackedToolCalls.add(serverCallId);
+  state.renderedToolCallsAwaitingAck.delete(serverCallId);
+  traceOut("TOOL_ACK", serverCallId, activeIdentity({ call_id: renderedClientCallId }));
+}
+
+function acknowledgeRenderedToolCall(renderedClientCallId: string) {
+  const serverCallId = serverCallIdFromClientCallId(renderedClientCallId);
+  sendToolAck(serverCallId, renderedClientCallId);
+}
+
+function flushRenderedToolAcks() {
+  for (const [serverCallId, renderedClientCallId] of state.renderedToolCallsAwaitingAck) {
+    sendToolAck(serverCallId, renderedClientCallId);
+  }
 }
 
 function clearResumeStallCheck() {
@@ -276,6 +314,7 @@ function connect(resume: boolean) {
     markConnected();
     if (resume) {
       resumeTurn();
+      flushRenderedToolAcks();
       scheduleInterruptionCheck();
       return;
     }
@@ -313,16 +352,6 @@ function connect(resume: boolean) {
       trace(message, receivedAt, undefined, traceIdentity(message));
       currentSocket.send(JSON.stringify({ type: "PONG", echo: message.challenge }));
       traceOut("PONG", `echo ${message.challenge || "(empty)"}`, activeIdentity());
-    }
-
-    if (message.type === "TOOL_CALL" && !state.ackedToolCalls.has(message.call_id)) {
-      state.ackedToolCalls.add(message.call_id);
-      currentSocket.send(JSON.stringify({ type: "TOOL_ACK", call_id: message.call_id }));
-      traceOut(
-        "TOOL_ACK",
-        message.call_id,
-        activeIdentity({ call_id: clientCallId(message.call_id) }),
-      );
     }
 
     for (const orderedMessage of state.sequenceGate.accept(message)) {
@@ -363,6 +392,7 @@ function startTurn(turnId: TurnId, attemptId: AttemptId) {
   clearStreamIdleCheck();
   state.sequenceGate.startTurn();
   state.ackedToolCalls.clear();
+  state.renderedToolCallsAwaitingAck.clear();
   state.answeredPingSeqs.clear();
   state.reconnectDelayMs = 500;
   state.lastAppliedSeq = 0;
@@ -391,5 +421,9 @@ function sendUserMessage(content: string, turnId: TurnId, attemptId: AttemptId) 
 self.onmessage = (event: MessageEvent<UiToWorker>) => {
   if (event.data.type === "send") {
     sendUserMessage(event.data.content, event.data.turnId, event.data.attemptId);
+  }
+
+  if (event.data.type === "tool_rendered") {
+    acknowledgeRenderedToolCall(event.data.client_call_id);
   }
 };
