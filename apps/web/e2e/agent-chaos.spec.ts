@@ -141,11 +141,12 @@ async function sendPrompt(page: Page, content = "run tool") {
   const sendButton = prompt.locator("xpath=..").locator("button").first();
 
   await expect(prompt).toBeVisible();
-  await prompt.fill(content);
+  await prompt.click();
+  await page.keyboard.type(content);
   await expect(prompt).toHaveValue(content);
   await expect(sendButton).toBeEnabled();
 
-  await sendButton.click();
+  await prompt.press("Enter");
   await waitForSent(page, "USER_MESSAGE");
 }
 
@@ -207,7 +208,7 @@ test("recovers when the socket drops after a tool call but before its result", a
   await receive(page, { type: "TOOL_RESULT", seq: 3, stream_id: "s", call_id: "c1", result: { ok: true } });
   await receive(page, { type: "STREAM_END", seq: 4, stream_id: "s" });
 
-  await expect(page.getByText(/ok/i)).toBeVisible();
+  await expect(page.locator(".w-rjv-object-key").filter({ hasText: /^ok$/ })).toBeVisible();
   await expect(page.getByText("lookup")).toHaveCount(1);
   expect(await sentMessages(page, "TOOL_ACK")).toEqual([{ type: "TOOL_ACK", call_id: "c1" }]);
 });
