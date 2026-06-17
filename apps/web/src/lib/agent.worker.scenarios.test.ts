@@ -2,12 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerMessage } from "../../../agent-server/src/types";
 import type { WorkerEvent } from "./worker-events";
 
-type UiToWorker = {
-  type: "send";
-  content: string;
-  turnId: string;
-  attemptId: string;
-};
+type UiToWorker =
+  | { type: "send"; content: string; turnId: string; attemptId: string }
+  | { type: "tool_rendered"; client_call_id: string };
 
 type WorkerScope = {
   onmessage: ((event: MessageEvent<UiToWorker>) => void) | null;
@@ -78,7 +75,7 @@ async function bootWorker() {
   vi.stubGlobal("self", scope);
   vi.stubGlobal("WebSocket", ScenarioWebSocket);
 
-  await import(`./agent.worker?scenario=${Date.now()}-${Math.random()}`);
+  await import("./agent.worker");
 
   return { posted, scope };
 }
@@ -91,6 +88,12 @@ function sendPrompt(scope: WorkerScope) {
       turnId: "turn:1",
       attemptId: "turn:1:attempt:1",
     },
+  } as MessageEvent<UiToWorker>);
+}
+
+function confirmToolRendered(scope: WorkerScope, clientCallId: string) {
+  scope.onmessage?.({
+    data: { type: "tool_rendered", client_call_id: clientCallId },
   } as MessageEvent<UiToWorker>);
 }
 
@@ -182,7 +185,7 @@ describe("agent worker chaos scenarios", () => {
     expect(ScenarioWebSocket.instances).toHaveLength(4);
   });
 
-  it("recovers when the socket drops after a tool call but before its result", async () => {
+  it("recovers when the socket drops after a rendered tool call but before its result", async () => {
     const { posted, scope } = await bootWorker();
 
     sendPrompt(scope);
@@ -199,10 +202,15 @@ describe("agent worker chaos scenarios", () => {
       args: { query: "x" },
     });
 
+    const clientCallId = "turn:1:attempt:1:call:c1";
+    expect(sentMessages(first as ScenarioWebSocket, "TOOL_ACK")).toEqual([]);
+    expect(eventsOf(posted, "tool_call")).toHaveLength(1);
+
+    confirmToolRendered(scope, clientCallId);
+
     expect(sentMessages(first as ScenarioWebSocket, "TOOL_ACK")).toEqual([
       { type: "TOOL_ACK", call_id: "c1" },
     ]);
-    expect(eventsOf(posted, "tool_call")).toHaveLength(1);
 
     first?.closeFromServer();
     await vi.advanceTimersByTimeAsync(500);
@@ -232,7 +240,7 @@ describe("agent worker chaos scenarios", () => {
     expect(eventsOf(posted, "tool_call")).toHaveLength(1);
     expect(eventsOf(posted, "tool_result")).toMatchObject([
       {
-        call_id: "turn:1:attempt:1:call:c1",
+        call_id: clientCallId,
         result: { ok: true },
         seq: 3,
         stream_id: "turn:1:attempt:1:stream:s",
