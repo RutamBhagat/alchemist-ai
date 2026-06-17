@@ -218,7 +218,12 @@ async function sentMessages(page: Page, type?: string) {
     .map((event) => event.payload)
     .filter((payload) => {
       if (!type) return true;
-      return typeof payload === "object" && payload !== null && "type" in payload && payload.type === type;
+      return (
+        typeof payload === "object" &&
+        payload !== null &&
+        "type" in payload &&
+        payload.type === type
+      );
     });
 }
 
@@ -230,7 +235,7 @@ async function waitForSent(page: Page, type: string) {
 
 test.beforeEach(async ({ page }) => {
   await installControlledWorkerWebSocket(page);
-  await page.goto("/");
+  await page.goto("http://127.0.0.1:3001/");
 });
 
 test("recovers when the socket drops after a tool call but before its result", async ({ page }) => {
