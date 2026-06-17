@@ -2,11 +2,13 @@
 
 ## Architecture split
 
-The WebSocket protocol loop lives in `apps/web/src/lib/agent.worker.ts`, not in React components. The worker owns the socket, heartbeat responses, `TOOL_ACK`, `RESUME`, sequence ordering, reconnect backoff, and per-turn protocol state. React receives typed worker events and updates the Zustand store.
+The WebSocket protocol loop lives in `apps/web/src/lib/agent.worker.ts`, not in React components. The worker owns the socket, heartbeat responses, `RESUME`, sequence ordering, reconnect backoff, and per-turn protocol state. React receives typed worker events and updates the Zustand store.
 
-This split is deliberate. Protocol messages such as `PONG` and `TOOL_ACK` should not depend on React scheduling, rendering, virtualization, or expensive JSON diff rendering. The UI can be busy without slowing down the server-visible protocol path.
+`TOOL_ACK` is intentionally a split path. The worker receives and orders `TOOL_CALL`, posts a typed event to the UI, and waits for the page to send a `tool_rendered` confirmation before the worker sends `TOOL_ACK` over the socket. This keeps the socket write in the worker while making the ACK depend on the tool card becoming part of the rendered UI state.
 
-The main app shell is split between `apps/web/src/app/page.tsx` and `apps/web/src/app/home-client.tsx`. It is responsible for rendering state, trace batching, context selection, user-triggered sends, and automatic interrupted-turn recovery. It does not parse raw WebSocket messages.
+This split is deliberate. `PONG` should never depend on React scheduling because it is a heartbeat response with no UI requirement. `TOOL_ACK`, however, is tied to whether the tool call is visible to the user, so the implementation accepts the additional main-thread round trip to satisfy the stricter render-confirmation interpretation.
+
+The main app shell is split between `apps/web/src/app/page.tsx` and `apps/web/src/app/home-client.tsx`. It is responsible for rendering state, trace batching, context selection, user-triggered sends, render-confirming tool cards, and automatic interrupted-turn recovery. It does not parse raw WebSocket messages.
 
 ## State data model
 
@@ -15,7 +17,7 @@ The primary chat state is intentionally small:
 - `entryOrder`: ordered user entries and agent-stream entries.
 - `userMessagesById`: user messages keyed by stable user target id.
 - `streamsById`: agent response streams keyed by protocol `stream_id`.
-- `toolsByCallId`: tool calls keyed by protocol `call_id`.
+- `toolsByCallId`: tool calls keyed by the UI-visible, attempt-scoped `call_id`.
 - `contexts`: a map from `context_id` to context snapshot history.
 - `selectedContextId`: the currently inspected context.
 
@@ -25,7 +27,7 @@ Each stream contains ordered parts. Consecutive tokens for the same text target 
 
 This model avoids cross-stream corruption when tokens, tool calls, and tool results from different streams are interleaved. It also avoids expensive full-message rewrites while keeping enough structure for target selection, trace linking, tool cards, and context inspection.
 
-The worker preserves the server's `stream_id` and `seq` in all UI-facing token/tool/result/end events. It keeps text targets per stream and tracks active streams independently, so one `STREAM_END` only completes the addressed stream.
+The worker preserves the server's `stream_id` and `seq` in all UI-facing token/tool/result/end events. It attempt-scopes UI ids so interrupted/retried attempts do not collide with replayed server ids. For ACK, the UI returns the attempt-scoped call id and the worker maps it back to the original server `call_id` before sending `TOOL_ACK`.
 
 ## Sequence ordering and deduplication
 
@@ -43,23 +45,25 @@ Messages with a sequence lower than `expectedSeq`, or already present in `proces
 
 ## TOOL_ACK timing
 
-`TOOL_ACK` is sent from the worker as soon as a valid `TOOL_CALL` is received. The assignment's observable protocol requirement is that ACK arrives within 2 seconds, and keeping this in the worker makes that deadline independent of React scheduling.
+`TOOL_ACK` is not sent on raw socket receipt. The worker waits until the `TOOL_CALL` has passed schema validation, sequence ordering, and UI dispatch. The page then observes the resulting `toolsByCallId` state in a React effect and posts `{ type: "tool_rendered", client_call_id }` back to the worker. Effects run after React has committed the render, so this is used as the practical signal that the tool card is now represented in UI state.
 
-The app intentionally does not add a worker -> main thread -> React render -> main thread -> worker confirmation loop before ACKing. The socket and protocol state already live in the worker, and the main thread only receives a simple state update for the tool card. Adding a render-confirmation round trip would make the protocol path more complex without improving the server-observed behavior, while increasing the chance of missing the ACK deadline during UI work.
+After that confirmation, the worker sends exactly one `TOOL_ACK` for the original server `call_id`. Duplicate `TOOL_CALL` deliveries are ignored for ACK purposes after the first confirmed ACK.
 
-Each distinct `call_id` is ACKed once per turn. Duplicate `TOOL_CALL` deliveries are ignored for ACK purposes after the first ACK.
+This is intentionally slower than ACKing directly in the worker. The tradeoff is that the server-visible ACK now corresponds to a tool card reaching the rendered UI path, which is the stricter interpretation of the assignment requirement. The risk is that severe React main-thread work, a sequence gap before the `TOOL_CALL`, or a disconnected socket can delay the ACK and trigger a server timeout. The implementation accepts that risk because ACKing before render would make `/log` look better while failing to prove the tool card actually appeared.
 
-The provided server must not be modified and has a replay/ACK-registration race. A `TOOL_CALL` can be recorded in replay history before the server registers the pending ACK wait. If the client sends `RESUME` during a chaos latency spike, replay can deliver that `TOOL_CALL`; the worker immediately ACKs it; the server has no pending ACK yet and logs the ACK as `unexpected`. When the original send path later registers the pending ACK, the worker correctly does not ACK the same `call_id` a second time, so the server can later log `TOOL_ACK_TIMEOUT`.
+The provided server must not be modified and has a replay/ACK-registration race. A `TOOL_CALL` can be recorded in replay history before the server registers the pending ACK wait. If the client sends `RESUME` during a chaos latency spike, replay can deliver that `TOOL_CALL`; the UI can render it and confirm it; the worker can ACK it; and the server can still log the ACK as `unexpected` if no pending ACK is registered yet.
 
-This is not fixable purely in the frontend without weakening another protocol requirement. Delaying ACKs would make the 2 second ACK deadline less reliable and still would not prove the server has registered its pending ACK. Sending repeated ACKs for the same `call_id` would turn deduplication into noisy protocol traffic and can create additional `unexpected` log entries after a normal ACK has already been accepted. ACKing only after React confirms paint would also be slower and still race with replayed messages. Given those constraints, the most reasonable client behavior is to ACK each distinct `TOOL_CALL` immediately in the worker, dedupe by `call_id`, and document that any `unexpected` plus later timeout for the same `call_id` can be caused by the server replay/ACK-registration race rather than a missed client ACK.
+This is not fully fixable purely in the frontend. Delaying ACK until render improves UI correctness but cannot prove the server has registered its pending ACK. Sending repeated ACKs for the same `call_id` would turn deduplication into noisy protocol traffic and can create additional `unexpected` log entries after a normal ACK has already been accepted. The client therefore ACKs each distinct rendered tool call once, maps the UI id back to the server `call_id`, and documents that replay can still create misleading `unexpected`/timeout patterns.
 
 ## UI-consumed sequence tracking approximation
 
-The worker treats an event as applied once it has passed schema validation, sequence ordering/deduplication, and has been posted to the main thread for the corresponding UI state update. In the strictest interpretation, `last_seq` would advance only after React has committed the rendered DOM update. The app intentionally does not add that main-thread acknowledgement loop.
+The worker treats an event as applied once it has passed schema validation, sequence ordering/deduplication, and has been posted to the main thread for the corresponding UI state update. In the strictest interpretation, `last_seq` would advance only after React has committed the rendered DOM update.
 
-This is a practical approximation. The protocol state, ordering buffer, reconnection logic, heartbeat handling, and ACK path all live in the Web Worker, while the main thread receives small typed events that synchronously update the Zustand store. The rendering path is kept lightweight: streamed text is appended to stable message parts, tool calls/results patch existing state by target id or `call_id`, the trace list is batched and virtualized, and large context rendering is isolated in the context panel. Under these constraints, the gap between worker `postMessage` and visible UI application is not a useful recovery boundary for this assignment.
+This is still a practical approximation for general stream recovery. The protocol state, ordering buffer, reconnection logic, and heartbeat handling all live in the Web Worker, while the main thread receives small typed events that synchronously update the Zustand store. The rendering path is kept lightweight: streamed text is appended to stable message parts, tool calls/results patch existing state by target id or `call_id`, the trace list is batched and virtualized, and large context rendering is isolated in the context panel.
 
-The tradeoff is that a browser crash, tab termination, or catastrophic React runtime failure between `postMessage` and commit could make `last_seq` slightly ahead of what was visibly painted. The app accepts that risk because adding per-event DOM commit acknowledgements would add latency, scheduling coupling, and backpressure to the protocol loop, making `PONG`, `TOOL_ACK`, and chaos-mode recovery less reliable in the common case.
+`TOOL_ACK` is the exception to this approximation. For tool calls, the page sends an explicit post-render `tool_rendered` confirmation back to the worker before ACK. The app does not add the same confirmation loop for every token/context/end event because doing so would add high-frequency backpressure to the protocol loop.
+
+The tradeoff is that a browser crash, tab termination, or catastrophic React runtime failure between worker `postMessage` and commit could make `last_seq` slightly ahead of what was visibly painted for non-tool events. The app accepts that risk because per-event DOM commit acknowledgements would add latency, scheduling coupling, and backpressure to streaming.
 
 ## Reconnect and recovery
 
@@ -108,7 +112,7 @@ For responses 100x longer than the normal demo cases, the current approach remai
 
 ## Known limitations and risks
 
-The frontend cannot guarantee `TOOL_ACK` within 2 seconds if the server itself delays, buffers, or replays a `TOOL_CALL` after the server-side timeout has already expired. The worker ACKs immediately after receipt, but it cannot ACK a message it has not yet received.
+The frontend cannot guarantee `TOOL_ACK` within 2 seconds if the server itself delays, buffers, or replays a `TOOL_CALL` after the server-side timeout has already expired. With render-confirmed ACKs, the frontend also depends on the `TOOL_CALL` reaching the ordered UI path and React running the confirmation effect promptly.
 
 The frontend cannot continue backend script execution after the supplied server aborts it on reconnect. The automatic latest-user-message retry is a pragmatic fallback, not protocol-level continuation.
 
@@ -120,9 +124,9 @@ All state is in memory. A full tab reload loses chat, trace, and context state. 
 
 ## Chaos-mode TOOL_ACK log interpretation
 
-In chaos mode, the server can delay, buffer, or reorder a `TOOL_CALL` before the browser receives it. The server-side ACK timeout may continue running during that delay. If the timeout expires before the `TOOL_CALL` is delivered to the client, the server logs `TOOL_ACK_TIMEOUT`.
+In chaos mode, the server can delay, buffer, or reorder a `TOOL_CALL` before the browser receives it. The server-side ACK timeout may continue running during that delay. If the timeout expires before the `TOOL_CALL` is delivered to the client, ordered, rendered, and confirmed, the server logs `TOOL_ACK_TIMEOUT`.
 
-When the delayed `TOOL_CALL` eventually reaches the client, the worker still sends `TOOL_ACK` immediately, because that is the only protocol-correct action available after receiving a valid tool call. At that point, however, the server may have already removed the pending ACK entry, so the later ACK is logged as `unexpected`.
+When the delayed `TOOL_CALL` eventually reaches the client, the worker waits for the UI render-confirmation effect and then sends `TOOL_ACK`. At that point, however, the server may have already removed the pending ACK entry, so the later ACK can be logged as `unexpected`.
 
 The observed chaos-mode pattern can therefore be:
 
@@ -131,4 +135,4 @@ The observed chaos-mode pattern can therefore be:
 { "type": "TOOL_ACK", "verdict": "unexpected" }
 ```
 
-This does not necessarily mean the frontend waited too long after receiving the tool call. It can mean the frontend received the tool call only after the server had already timed out or after replay delivered it before ACK registration completed.
+This does not necessarily mean the frontend ignored the tool call. It can mean the frontend received/rendered the tool call only after the server had already timed out or after replay delivered it before ACK registration completed.
