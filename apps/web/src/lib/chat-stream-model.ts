@@ -22,6 +22,7 @@ export type StreamPart = TextPart | ToolPart;
 
 export type ToolCall = {
   call_id: string;
+  server_call_id: string;
   stream_id: string;
   tool_name: string;
   args: Record<string, unknown>;
@@ -121,6 +122,7 @@ export function addToolCallToStream(
     stream_id: string;
     seq: number;
     call_id: string;
+    server_call_id?: string;
     tool_name: string;
     args: Record<string, unknown>;
   },
@@ -153,6 +155,7 @@ export function addToolCallToStream(
       ...state.toolsByCallId,
       [event.call_id]: {
         call_id: event.call_id,
+        server_call_id: event.server_call_id ?? event.call_id,
         stream_id: event.stream_id,
         tool_name: event.tool_name,
         args: event.args,
