@@ -1,12 +1,8 @@
-import { useEffect } from "react";
 import JsonView from "@uiw/react-json-view";
 import { cn } from "@alchemist-ai/ui/lib/utils";
 import type { ToolCall } from "@/lib/chat-stream-model";
 
-type ToolRenderedPayload = Pick<ToolCall, "call_id">;
-
 type ToolCallCardProps = {
-  onRendered: (tool: ToolRenderedPayload) => void;
   onSelect: () => void;
   selected: boolean;
   target: string;
@@ -14,18 +10,11 @@ type ToolCallCardProps = {
 };
 
 export function ToolCallCard({
-  onRendered,
   onSelect,
   selected,
   target,
   tool,
 }: ToolCallCardProps) {
-  const { call_id } = tool;
-
-  useEffect(() => {
-    onRendered({ call_id });
-  }, [call_id, onRendered]);
-
   return (
     <div
       className={cn(
