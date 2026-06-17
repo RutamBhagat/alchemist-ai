@@ -138,8 +138,10 @@ function controlledWebSocketShim() {
 
 async function sendPrompt(page: Page, content = "run tool") {
   const prompt = page.locator("textarea");
+  const sendButton = page.locator("button").last();
   await prompt.fill(content);
-  await prompt.press("Enter");
+  await expect(sendButton).toBeEnabled();
+  await sendButton.click();
   await waitForSent(page, "USER_MESSAGE");
 }
 
@@ -176,14 +178,9 @@ async function waitForSent(page: Page, type: string) {
   await expect.poll(async () => sentMessages(page, type), { timeout: 5_000 }).toHaveLength(1);
 }
 
-async function waitForControlledWorker(page: Page) {
-  await expect.poll(() => page.evaluate(() => window.__agentTest?.workerReady === true), { timeout: 5_000 }).toBe(true);
-}
-
 test.beforeEach(async ({ page }) => {
   await installControlledWorkerWebSocket(page);
   await page.goto("http://127.0.0.1:3001/");
-  await waitForControlledWorker(page);
 });
 
 test("recovers when the socket drops after a tool call but before its result", async ({ page }) => {
