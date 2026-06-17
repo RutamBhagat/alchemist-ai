@@ -25,6 +25,7 @@
     "dev": "vp run -r dev",
     "build": "vp run -r build",
     "test": "vp test watch",
+    "test:e2e": "playwright test",
     "check-types": "vp run -r check-types",
     "check": "vp check && vp run -r check-types",
     "lint": "vp lint",
@@ -40,6 +41,7 @@
   },
   "devDependencies": {
     "@alchemist-ai/config": "workspace:*",
+    "@playwright/test": "^1.56.0",
     "rolldown": "1.1.0",
     "typescript": "catalog:",
     "vite-plus": "0.1.24"
