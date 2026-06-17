@@ -21,6 +21,7 @@ declare global {
   interface Window {
     __agentTest?: {
       socketEvents: SocketEvent[];
+      workerReady: boolean;
       postToWorker: (command: SocketCommand) => void;
     };
   }
@@ -32,6 +33,7 @@ async function installControlledWorkerWebSocket(page: Page) {
     const socketEvents: SocketEvent[] = [];
     window.__agentTest = {
       socketEvents,
+      workerReady: false,
       postToWorker(command: SocketCommand) {
         throw new Error(`Worker is not ready for ${command.op}`);
       },
@@ -39,6 +41,7 @@ async function installControlledWorkerWebSocket(page: Page) {
     window.Worker = class ControlledWorker extends NativeWorker {
       constructor(scriptURL: string | URL, options?: WorkerOptions) {
         super(scriptURL, options);
+        window.__agentTest!.workerReady = true;
         window.__agentTest!.postToWorker = (command: SocketCommand) => {
           this.postMessage({ __testWebSocket: command });
         };
@@ -173,9 +176,14 @@ async function waitForSent(page: Page, type: string) {
   await expect.poll(async () => sentMessages(page, type), { timeout: 5_000 }).toHaveLength(1);
 }
 
+async function waitForControlledWorker(page: Page) {
+  await expect.poll(() => page.evaluate(() => window.__agentTest?.workerReady === true), { timeout: 5_000 }).toBe(true);
+}
+
 test.beforeEach(async ({ page }) => {
   await installControlledWorkerWebSocket(page);
   await page.goto("http://127.0.0.1:3001/");
+  await waitForControlledWorker(page);
 });
 
 test("recovers when the socket drops after a tool call but before its result", async ({ page }) => {
