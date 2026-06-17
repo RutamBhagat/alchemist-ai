@@ -138,9 +138,13 @@ function controlledWebSocketShim() {
 
 async function sendPrompt(page: Page, content = "run tool") {
   const prompt = page.locator("textarea");
-  const sendButton = page.locator("button").last();
+  const sendButton = prompt.locator("xpath=..").locator("button").first();
+
+  await expect(prompt).toBeVisible();
   await prompt.fill(content);
+  await expect(prompt).toHaveValue(content);
   await expect(sendButton).toBeEnabled();
+
   await sendButton.click();
   await waitForSent(page, "USER_MESSAGE");
 }
